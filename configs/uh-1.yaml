@@ -1,0 +1,84 @@
+# ===========================================================================
+#  UH-1  Hot water unit heater simulator
+# ===========================================================================
+#  Points list (as installed):
+#    ALC controller -> simulator  : HW valve command        (simulator BO-1)
+#    simulator -> ALC controller  : Fan amps, CT 0-10 A     (ALC AI:1, out of service)
+#    simulator -> ALC controller  : Space temperature       (ALC AV:1)
+#
+#  Change orders: add/remove entries under `commands`, `monitor` and
+#  `controller.writes`.  Every available signal is listed at the bottom.
+# ===========================================================================
+
+simulator:
+  name: UH-1-SIM
+  device_instance: 4010001            # simulator's own BACnet device instance
+  address: 192.168.1.51/24            # simulator's own BACnet/IP address (port 47808 default)
+  description: Hot water unit heater simulator
+  model_name: HW Unit Heater Sim
+  location: Training Lab
+  speed: 1.0                          # 1.0 = real time
+  step: 0.1                           # s between simulation updates
+
+web:
+  port: 8080                          # http://<host>:8080
+
+equipment:
+  type: hw_unit_heater
+  params:                             # any value from DEFAULTS in hvacsim/models/unit_heater.py
+    hw_supply_temp: 180.0
+    aquastat_close_temp: 90.0
+    aquastat_open_temp: 80.0
+    motor_run_amps: 2.0
+    ct_range_amps: 10.0
+    oat: 30.0
+    initial_space_temp: 64.0
+    fan_control: aquastat             # aquastat only; no controller fan command
+
+# --- Objects the ALC controller writes to (network output microblocks) -----
+commands:
+  - object: binary-output,1
+    name: HWV_CMD
+    input: valve_cmd
+    description: HW valve open command
+    active_text: Open
+    inactive_text: Closed
+    relinquish_default: false
+
+# --- Values the simulator writes into the ALC controller --------------------
+controller:
+  device_instance: 240110             # <-- ALC controller device ID (trainee design)
+  address:                            # blank = find with Who-Is; or e.g. 192.168.1.20
+  min_interval: 1.0                   # s, minimum time between writes of one point
+  writes:
+    - name: Fan amps
+      signal: fan_amps
+      object: analog-input,1          # fixed object ID (input is Out_Of_Service)
+      deadband: 0.05                  # A
+      heartbeat: 30                   # s, rewrite even if unchanged
+    - name: Space temp
+      signal: space_temp
+      object: analog-value,1          # fixed object ID
+      deadband: 0.1                   # F
+      heartbeat: 30
+      # priority: 16                  # only if the AV is commandable
+
+# --- Read-only troubleshooting points on the simulator ----------------------
+monitor:
+  - { object: "analog-value,101", name: SPACE_TEMP_ACTUAL, signal: space_temp_actual }
+  - { object: "analog-value,102", name: HW_PIPE_TEMP,     signal: pipe_temp }
+  - { object: "analog-value,103", name: COIL_TEMP,        signal: coil_temp }
+  - { object: "analog-value,104", name: VALVE_POSITION,   signal: valve_position }
+  - { object: "analog-value,105", name: MOTOR_AMPS,       signal: motor_amps }
+  - { object: "analog-value,106", name: HEAT_OUTPUT,      signal: heat_output }
+  - { object: "analog-value,107", name: OA_TEMP,          signal: oat }
+  - { object: "binary-value,101", name: AQUASTAT,         signal: aquastat_closed, active_text: Closed, inactive_text: Open }
+  - { object: "binary-value,102", name: FAN_RUNNING,      signal: fan_running }
+
+# ---------------------------------------------------------------------------
+#  Available signals (hw_unit_heater):
+#    space_temp space_temp_actual fan_amps motor_amps valve_position
+#    hw_branch_temp pipe_temp coil_temp heat_output fan_speed oat
+#    aquastat_closed motor_energized fan_running protector_tripped
+#  Available inputs:  valve_cmd  fan_cmd
+# ---------------------------------------------------------------------------

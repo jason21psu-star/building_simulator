@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unit Heater Simulator</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1d2330; --muted: #677085; --line: #d9dde5;
+    --accent: #1f6feb; --ok: #1a7f37; --warn: #b35900; --bad: #cf222e; --chip: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151c; --panel: #1a2029; --ink: #e6e9ef; --muted: #98a2b3; --line: #2c3542;
+            --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --bad: #f85149; --chip: #242c38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline;
+           padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 18px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .stack { display: grid; gap: 16px; align-content: start; }
+  svg { width: 100%; height: auto; display: block; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.v { text-align: right; font-weight: 600; white-space: nowrap; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--chip); }
+  .pill.on { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+  .pill.err { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input[type=number], input[type=text] { width: 110px; padding: 5px 7px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+  button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--chip);
+           color: var(--ink); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .faults { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 4px 16px; }
+  .fgroup { font-size: 12px; color: var(--muted); margin-top: 8px; grid-column: 1 / -1; }
+  .fault { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+  .fault.active label { color: var(--bad); font-weight: 600; }
+  .fault input[type=number] { width: 70px; }
+  .log { max-height: 220px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  .muted { color: var(--muted); }
+  .err-text { color: var(--bad); font-size: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #fanblades { transform-box: fill-box; transform-origin: center; }
+  #fanblades.run { animation: spin .5s linear infinite; }
+  #fanblades.coast { animation: spin 1.6s linear infinite; }
+  .svgtext { font: 12px system-ui, sans-serif; fill: var(--ink); }
+  .svglabel { font: 11px system-ui, sans-serif; fill: var(--muted); }
+  .svgbig { font: 600 15px system-ui, sans-serif; fill: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Unit Heater Simulator</h1>
+  <span class="meta" id="devmeta"></span>
+  <span class="meta" id="simtime"></span>
+</header>
+<main>
+  <div class="stack">
+    <section class="panel">
+      <h2>Equipment</h2>
+      <svg viewBox="0 0 640 360" role="img" aria-label="Hot water unit heater schematic">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--warn)"/>
+          </marker>
+        </defs>
+        <!-- HW supply line -->
+        <text x="18" y="70" class="svglabel">HW SUPPLY</text>
+        <line id="pipe_branch" x1="18" y1="84" x2="150" y2="84" stroke-width="10" stroke-linecap="round"/>
+        <line id="pipe_supply" x1="190" y1="84" x2="330" y2="84" stroke-width="10"/>
+        <line id="pipe_supply2" x1="330" y1="84" x2="330" y2="120" stroke-width="10"/>
+        <!-- valve (bowtie) -->
+        <g id="valve">
+          <path d="M150,70 L190,98 L190,70 L150,98 Z" stroke="var(--ink)" stroke-width="1.5" id="valvebody"/>
+          <rect x="160" y="40" width="20" height="22" rx="3" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2"/>
+          <line x1="170" y1="62" x2="170" y2="84" stroke="var(--ink)" stroke-width="1.5"/>
+        </g>
+        <text x="146" y="122" class="svglabel">2-POS VALVE</text>
+        <text x="146" y="138" class="svgtext" id="t_valve"></text>
+        <!-- aquastat -->
+        <rect x="236" y="72" width="44" height="24" rx="4" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2" id="aq_box"/>
+        <text x="258" y="88" text-anchor="middle" class="svglabel">AQ</text>
+        <text x="216" y="30" class="svglabel" id="t_aqsp">AQUASTAT</text>
+        <text x="216" y="48" class="svgtext" id="t_aq"></text>
+        <text x="216" y="114" class="svgtext" id="t_pipe"></text>
+        <!-- unit heater cabinet -->
+        <rect x="300" y="120" width="190" height="150" rx="6" fill="none" stroke="var(--ink)" stroke-width="2"/>
+        <!-- coil -->
+        <rect id="coil" x="314" y="132" width="34" height="126" rx="3"/>
+        <g stroke="var(--panel)" stroke-width="1.5" opacity=".7">
+          <line x1="314" y1="146" x2="348" y2="146"/><line x1="314" y1="160" x2="348" y2="160"/>
+          <line x1="314" y1="174" x2="348" y2="174"/><line x1="314" y1="188" x2="348" y2="188"/>
+          <line x1="314" y1="202" x2="348" y2="202"/><line x1="314" y1="216" x2="348" y2="216"/>
+          <line x1="314" y1="230" x2="348" y2="230"/><line x1="314" y1="244" x2="348" y2="244"/>
+        </g>
+        <text x="331" y="286" text-anchor="middle" class="svglabel">COIL</text>
+        <text x="331" y="302" text-anchor="middle" class="svgtext" id="t_coil"></text>
+        <!-- fan -->
+        <circle cx="420" cy="195" r="52" fill="none" stroke="var(--line)" stroke-width="2"/>
+        <g id="fanblades" fill="var(--muted)">
+          <path d="M420,195 C405,165 420,148 432,152 C440,160 430,180 420,195 Z"/>
+          <path d="M420,195 C450,180 467,195 463,207 C455,215 435,205 420,195 Z"/>
+          <path d="M420,195 C435,225 420,242 408,238 C400,230 410,210 420,195 Z"/>
+          <path d="M420,195 C390,210 373,195 377,183 C385,175 405,185 420,195 Z"/>
+          <circle cx="420" cy="195" r="7" fill="var(--ink)"/>
+        </g>
+        <!-- motor + CT -->
+        <rect x="500" y="178" width="46" height="34" rx="5" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2" id="motor"/>
+        <text x="523" y="199" text-anchor="middle" class="svglabel">M</text>
+        <line x1="546" y1="195" x2="600" y2="195" stroke="var(--ink)" stroke-width="1.5"/>
+        <circle cx="575" cy="195" r="9" fill="none" stroke="var(--accent)" stroke-width="3"/>
+        <text x="560" y="174" class="svglabel">CT 0-10 A</text>
+        <text x="560" y="230" class="svgbig" id="t_amps"></text>
+        <text x="500" y="250" class="svgtext" id="t_motor"></text>
+        <!-- warm air -->
+        <g id="air" color="var(--warn)" stroke="var(--warn)" stroke-width="2.5" fill="none">
+          <line x1="360" y1="290" x2="360" y2="330" marker-end="url(#arrow)"/>
+          <line x1="420" y1="290" x2="420" y2="335" marker-end="url(#arrow)"/>
+          <line x1="480" y1="290" x2="480" y2="330" marker-end="url(#arrow)"/>
+        </g>
+        <!-- space sensor -->
+        <rect x="40" y="220" width="60" height="70" rx="8" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2"/>
+        <text x="70" y="250" text-anchor="middle" class="svgbig" id="t_space"></text>
+        <text x="70" y="272" text-anchor="middle" class="svglabel">SPACE</text>
+        <text x="40" y="312" class="svglabel" id="t_space_actual"></text>
+        <text x="40" y="330" class="svglabel" id="t_oat"></text>
+        <text x="300" y="350" class="svgtext" id="t_q"></text>
+      </svg>
+    </section>
+
+    <section class="panel">
+      <h2>Fault injection</h2>
+      <div class="faults" id="faults"></div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="post('/api/faults/clear',{})">Clear all faults</button>
+        <button onclick="if(confirm('Reset equipment to cold start?')) post('/api/reset',{})">Reset equipment</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="panel">
+      <h2>Controller link (simulator writes to ALC)</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label>Device ID <input type="number" id="ctl_id" min="0" max="4194302"></label>
+        <label>Address <input type="text" id="ctl_addr" placeholder="Who-Is"></label>
+        <button class="primary" onclick="setController()">Apply</button>
+      </div>
+      <div class="muted" id="ctl_status"></div>
+      <table style="margin-top:8px">
+        <thead><tr><th>Point</th><th>ALC object</th><th class="v">Value</th><th>Status</th></tr></thead>
+        <tbody id="writes"></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Commands (ALC writes to simulator)</h2>
+      <table>
+        <thead><tr><th>Object</th><th>Present value</th><th>Priority array</th></tr></thead>
+        <tbody id="commands"></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Simulator monitor points</h2>
+      <table><tbody id="monitor"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>Conditions</h2>
+      <div class="row">
+        <label>OA temp °F <input type="number" id="p_oat" step="1"></label>
+        <label>HW supply °F <input type="number" id="p_hw" step="5"></label>
+        <label>Speed × <input type="number" id="p_speed" step="1" min="0"></label>
+        <button onclick="applyParams()">Apply</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Event log</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let faultsBuilt = false, paramsLoaded = false, ctlLoaded = false;
+
+function tempColor(t) {
+  const x = Math.max(0, Math.min(1, (t - 60) / 120));
+  const lerp = (a, b) => Math.round(a + (b - a) * x);
+  return `rgb(${lerp(60, 220)},${lerp(120, 50)},${lerp(220, 40)})`;
+}
+async function post(url, body) {
+  await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  refresh();
+}
+function setController() {
+  post('/api/controller', {device_instance: parseInt($('ctl_id').value), address: $('ctl_addr').value.trim()});
+}
+function applyParams() {
+  post('/api/param', {name: 'oat', value: parseFloat($('p_oat').value)});
+  post('/api/param', {name: 'hw_supply_temp', value: parseFloat($('p_hw').value)});
+  post('/api/param', {name: 'speed', value: parseFloat($('p_speed').value)});
+}
+function shortObj(o) {
+  const map = {'analog-input':'AI','analog-output':'AO','analog-value':'AV','binary-input':'BI',
+               'binary-output':'BO','binary-value':'BV','multi-state-value':'MSV'};
+  const [t, i] = o.split(','); return `${map[t] || t}:${i}`;
+}
+function fmt(v) {
+  if (typeof v === 'boolean') return v ? '<span class="pill on">ON</span>' : '<span class="pill">OFF</span>';
+  if (typeof v === 'number') return v.toFixed(Math.abs(v) >= 1000 ? 0 : 2);
+  return v ?? '—';
+}
+function buildFaults(faults) {
+  let html = '', group = '';
+  for (const f of faults) {
+    if (f.group !== group) { group = f.group; html += `<div class="fgroup">${group}</div>`; }
+    const num = f.kind === 'number'
+      ? `<input type="number" step="any" id="fv_${f.name}" value="${f.value}" title="${f.description}"> <span class="muted">${f.units}</span>` : '';
+    html += `<div class="fault" id="fr_${f.name}"><input type="checkbox" id="fc_${f.name}"
+      onchange="toggleFault('${f.name}', this.checked)"><label for="fc_${f.name}">${f.label}</label>${num}</div>`;
+  }
+  $('faults').innerHTML = html;
+  faultsBuilt = true;
+}
+function toggleFault(name, active) {
+  const v = $('fv_' + name);
+  post('/api/fault', {name, active, value: v ? v.value : null});
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch('/api/state')).json(); } catch (e) { $('simtime').textContent = 'disconnected'; return; }
+  const g = s.signals, sim = s.simulator;
+  $('title').textContent = sim.name;
+  $('devmeta').textContent = `BACnet device ${sim.device_instance} · ${sim.address} · ${sim.description}`;
+  const t = Math.round(sim.sim_time);
+  $('simtime').textContent = `sim time ${Math.floor(t/3600)}h ${String(Math.floor(t/60)%60).padStart(2,'0')}m ${String(t%60).padStart(2,'0')}s · ${sim.speed}× speed`;
+
+  // schematic
+  $('pipe_branch').setAttribute('stroke', tempColor(g.hw_branch_temp));
+  $('pipe_supply').setAttribute('stroke', tempColor(g.pipe_temp));
+  $('pipe_supply2').setAttribute('stroke', tempColor(g.pipe_temp));
+  $('coil').setAttribute('fill', tempColor(g.coil_temp));
+  $('valvebody').setAttribute('fill', g.valve_position > 50 ? 'var(--ok)' : 'var(--chip)');
+  $('t_valve').textContent = `${g.valve_position.toFixed(0)}% open`;
+  $('t_pipe').textContent = `${g.pipe_temp.toFixed(1)}°F`;
+  $('t_aqsp').textContent = `AQUASTAT on ${s.params.aquastat_close_temp}°F / off ${s.params.aquastat_open_temp}°F`;
+  $('aq_box').setAttribute('fill', g.aquastat_closed ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--chip)');
+  $('t_aq').textContent = g.aquastat_closed ? 'CLOSED - fan enabled' : 'OPEN';
+  $('t_coil').textContent = `${g.coil_temp.toFixed(0)}°F`;
+  const fb = $('fanblades');
+  fb.classList.toggle('run', g.fan_speed > 80);
+  fb.classList.toggle('coast', g.fan_speed > 1 && g.fan_speed <= 80);
+  $('t_amps').textContent = `${g.fan_amps.toFixed(2)} A`;
+  $('t_motor').textContent = g.protector_tripped ? 'THERMAL PROTECTOR OPEN'
+    : g.motor_energized ? (g.fan_running ? 'motor running' : 'motor energized, not turning') : 'motor off';
+  $('motor').setAttribute('stroke', g.protector_tripped ? 'var(--bad)' : 'var(--ink)');
+  $('air').style.opacity = Math.max(0.08, Math.min(1, g.heat_output / 20000) * (g.fan_speed / 100));
+  $('t_space').textContent = `${g.space_temp.toFixed(1)}°`;
+  $('t_space_actual').textContent = `actual ${g.space_temp_actual.toFixed(1)}°F`;
+  $('t_oat').textContent = `OA ${g.oat.toFixed(0)}°F`;
+  $('t_q').textContent = `heat output ${Math.round(g.heat_output).toLocaleString()} BTU/h`;
+
+  // controller link
+  const c = s.controller;
+  if (!ctlLoaded) { $('ctl_id').value = c.device_instance; $('ctl_addr').value = c.address || ''; ctlLoaded = true; }
+  $('ctl_status').textContent = c.status;
+  $('writes').innerHTML = c.points.map(p => `<tr><td>${p.name}</td><td>${shortObj(p.object)}${p.priority ? ' @' + p.priority : ''}</td>
+    <td class="v">${fmt(p.last_value)}</td>
+    <td>${p.ok === true ? '<span class="pill on">OK</span>' : p.ok === false ? '<span class="pill err">FAIL</span>' : '<span class="pill">—</span>'}
+    <span class="muted">${p.writes} writes${p.age != null ? ', ' + p.age + 's ago' : ''}</span>
+    ${p.last_error ? `<div class="err-text">${p.last_error}</div>` : ''}</td></tr>`).join('');
+
+  // commands
+  $('commands').innerHTML = s.commands.map(cmd => `<tr><td><b>${cmd.name}</b><br><span class="muted">${shortObj(cmd.object)}</span></td>
+    <td>${fmt(cmd.present_value)}<br><span class="muted">${cmd.active_priority ? 'priority ' + cmd.active_priority : 'relinquish default'}</span></td>
+    <td>${cmd.slots.length ? cmd.slots.map(x => `<span class="pill">${x.priority}: ${x.value === true ? 'ON' : x.value === false ? 'OFF' : x.value}</span>`).join(' ')
+      : '<span class="muted">all NULL · default ' + (cmd.relinquish_default ? 'ON' : 'OFF') + '</span>'}</td></tr>`).join('');
+
+  $('monitor').innerHTML = s.monitor.map(m => `<tr><td>${m.name}</td><td class="muted">${shortObj(m.object)}</td><td class="v">${fmt(m.value)}</td></tr>`).join('');
+
+  if (!faultsBuilt) buildFaults(s.faults);
+  for (const f of s.faults) {
+    const cb = $('fc_' + f.name); if (cb) cb.checked = f.active;
+    const row = $('fr_' + f.name); if (row) row.classList.toggle('active', f.active);
+  }
+  if (!paramsLoaded) { $('p_oat').value = s.params.oat; $('p_hw').value = s.params.hw_supply_temp; $('p_speed').value = sim.speed; paramsLoaded = true; }
+
+  $('log').innerHTML = s.events.map(e => `<div><span class="muted">${e.t}</span> ${e.text}</div>`).join('');
+}
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
