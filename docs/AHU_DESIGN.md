@@ -158,9 +158,9 @@ Names follow the confirmed convention.
 | Supply Air Humidity | AI | `sa_rh` | written to ALC |
 | Supply Air Static Pressure | AI | `sa_static` | written to ALC |
 | Supply Air Temp | AI | `sa_temp` | written to ALC |
-| Return Fan Amps | AI | `rf_amps` | written to ALC (CT) |
+| Return Fan Amps | AI | `rf_amps` | written to ALC (CT, 0-30 A) |
 | Return Fan VFD Feedback | AI | `rf_vfd_fb` | written to ALC (drive AO1) |
-| Supply Fan 1-4 Amps | 4 × AI | `sf1_amps` … `sf4_amps` | written to ALC (CT per fan) |
+| Supply Fan 1-4 Amps | 4 × AI | `sf1_amps` … `sf4_amps` | written to ALC (CT per fan, 0-30 A) |
 | Supply Fan 1-4 VFD Feedback | 4 × AI | `sf1_vfd_fb` … `sf4_vfd_fb` | written to ALC (drive AO1 per fan) |
 | Freezestat | BI | `frz_stat` | written to ALC |
 | High Static Shutdown | BI | `hi_static` | written to ALC |
@@ -220,10 +220,9 @@ Decided in review:
 | Weather default | Fixed values |
 | Supply fan size | 8,000 cfm each (N+1) |
 | Humidifier high limit | Hardwired 75 % RH supply humidistat breaking steam valve actuator power |
+| CT ranges | 0-30 A on all fans (SF-1…4 and RF) |
+| Humidistat reset | Automatic, 5 % RH differential |
 
 Still open:
 
-1. **CT ranges** for the amps AIs (e.g. 0-20 A supply fans, 0-30 A return fan).
-2. **VFD changes** you're still testing. These affect all five AHU drives.
-3. **Humidistat reset type.** Assumed automatic reset with a 5 % RH
-   differential. Change it if your spec calls for manual reset.
+1. **VFD changes** you're still testing. These affect all five AHU drives.
