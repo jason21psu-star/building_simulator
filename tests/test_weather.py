@@ -91,7 +91,7 @@ async def _host():
     host = Host(cfg, demo=True, demo_controllers=False)
     wx, uh = host.unit("WX-1"), host.unit("UH-1-SIM")
     assert host.units[0] is wx and uh.weather is wx and uh.weather_params == {"oat": "oa_temp_actual"}
-    alc = MockController(240110, bacnet_io.virtual_port(1, DEMO_LAN, 1, 0x20), name="ALC")
+    alc = MockController(240110, bacnet_io.virtual_port(1, DEMO_LAN, host.ip_network, 0x20), name="ALC")
     task = asyncio.create_task(host.run())
     try:
         await asyncio.sleep(0.3)

@@ -242,7 +242,7 @@ async def _bacnet():
     cfg["host"]["speed"] = 20.0
     cfg["instances"][0]["equipment"]["params"]["comm_loss_time"] = 2.0   # SF-1 fieldbus
     host = Host(cfg, demo=True, demo_controllers=False)
-    alc = MockController(240110, bacnet_io.virtual_port(1, DEMO_LAN, 1, 0x20), name="ALC")
+    alc = MockController(240110, bacnet_io.virtual_port(1, DEMO_LAN, host.ip_network, 0x20), name="ALC")
     for name, obj in (("sf2_status", "binary-input,1"), ("sf2_fault", "binary-input,2"), ("sf2_speed_fb", "analog-input,1")):
         alc.add_point(name, obj)
     sf1, sf2 = host.units

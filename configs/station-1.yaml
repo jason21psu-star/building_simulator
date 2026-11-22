@@ -4,7 +4,7 @@
 #  One host = one IP address.  The host is a BACnet router; every instance
 #  below is its own BACnet device on the host's virtual network:
 #
-#    192.168.1.51:47808  router, device 4010000   (IP network = ip_network)
+#    192.168.0.79:47808  router, device 4010000   (IP network = ip_network)
 #      └── virtual network 5001
 #            ├── UH-1-SIM  device 4010001  MAC 1   -> 5001:1
 #            └── UH-2-SIM  device 4010002  MAC 2   -> 5001:2
@@ -13,8 +13,8 @@
 host:
   name: SIM-HOST-1
   device_instance: 4010000            # the router's own device instance
-  address: 192.168.1.51/24            # this machine's IP on the lab network
-  ip_network: 1                       # BACnet network number of the lab IP network:
+  address: 192.168.0.79/24            # this machine's IP on the lab network
+  ip_network: 2400                    # BACnet network number of the lab IP network:
                                       #   MUST match the number the ALC system uses
   virtual_network: 5001               # MUST be unique in the whole BACnet internetwork
   location: Training Lab
@@ -37,7 +37,7 @@ instances:
     mac: 1                            # address on the virtual network (1-254)
     vars: { n: 1 }                    # fan_amps_1, zone_temp_1
     controller:
-      device_instance: 240110         # <-- ALC controller device ID (trainee design)
+      device_instance: 240104         # <-- ALC controller device ID (trainee design)
       # address: 192.168.1.20         # optional: skip Who-Is
 
   - name: UH-2-SIM
@@ -46,10 +46,10 @@ instances:
     mac: 2
     vars: { n: 2 }                    # fan_amps_2, zone_temp_2
     controller:
-      device_instance: 240110         # same controller as UH-1, or a different one
+      device_instance: 240105         # same controller as UH-1, or a different one
     equipment:
       params:
-        hw_supply_temp: 170.0         # per-instance overrides merge into the template
+        hw_supply_temp: 140.0         # per-instance overrides merge into the template
 
   # --- VFDs (ACH580-style) --------------------------------------------------
   - name: SF-1-VFD                    # fieldbus: ALC reads/writes the drive's objects

@@ -167,9 +167,11 @@ async def _demo():
     host.speed = 50
     run = asyncio.create_task(host.run())
     try:
-        mock = host.mocks[0]
-        assert await wait_for(lambda: (mock.value("fan_amps_1") or 0) > 1.5 and (mock.value("fan_amps_2") or 0) > 1.5, 20)
-        assert all(t.call for t in mock.thermostats)
+        # one demo controller per configured controller device (UH-1 -> 240104, UH-2 -> 240105)
+        by_dev = {m.device_instance: m for m in host.mocks}
+        uh1, uh2 = by_dev[240104], by_dev[240105]
+        assert await wait_for(lambda: (uh1.value("fan_amps_1") or 0) > 1.5 and (uh2.value("fan_amps_2") or 0) > 1.5, 20)
+        assert all(t.call for m in (uh1, uh2) for t in m.thermostats)
     finally:
         run.cancel()
         host.close()
@@ -195,7 +197,7 @@ def test_station_config_template_vars():
     uh = [i for i in cfg["instances"] if i["equipment"]["type"] == "hw_unit_heater"]
     names = [[w["object_name"] for w in i["controller"]["writes"]] for i in uh]
     assert names == [["fan_amps_1", "zone_temp_1"], ["fan_amps_2", "zone_temp_2"]]
-    assert uh[1]["equipment"]["params"]["hw_supply_temp"] == 170.0   # instance override
+    assert uh[1]["equipment"]["params"]["hw_supply_temp"] == 140.0   # instance override
     assert uh[0]["equipment"]["params"]["hw_supply_temp"] == 180.0   # template value
 
 
