@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unit Heater Simulator</title>
+<title>Equipment Simulators</title>
 <style>
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --ink: #1d2330; --muted: #677085; --line: #d9dde5;
@@ -20,6 +20,12 @@
            padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header h1 { font-size: 18px; margin: 0; }
   header .meta { color: var(--muted); font-size: 13px; }
+  nav#tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 20px 0; }
+  nav#tabs button { border-radius: 8px 8px 0 0; border-bottom: none; display: flex; gap: 6px; align-items: center; }
+  nav#tabs button.sel { background: var(--panel); font-weight: 600; box-shadow: inset 0 3px 0 var(--accent); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.fault { background: var(--warn); }
+  @media (max-width: 1000px) { nav#tabs { padding: 10px 16px 0; } }
   main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
   @media (max-width: 1000px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -58,9 +64,14 @@
 </head>
 <body>
 <header>
-  <h1 id="title">Unit Heater Simulator</h1>
-  <span class="meta" id="devmeta"></span>
+  <h1 id="hostname">Simulator host</h1>
+  <span class="meta" id="hostmeta"></span>
   <span class="meta" id="simtime"></span>
+</header>
+<nav id="tabs" aria-label="Equipment instances"></nav>
+<header style="border-top:1px solid var(--line)">
+  <h1 id="title">Unit</h1>
+  <span class="meta" id="devmeta"></span>
 </header>
 <main>
   <div class="stack">
@@ -161,6 +172,11 @@
       </table>
     </section>
 
+    <section class="panel" id="demo_panel" hidden>
+      <h2>Demo ALC controllers (in-process)</h2>
+      <div id="demo"></div>
+    </section>
+
     <section class="panel">
       <h2>Commands (ALC writes to simulator)</h2>
       <table>
@@ -194,6 +210,12 @@
 <script>
 const $ = id => document.getElementById(id);
 let faultsBuilt = false, paramsLoaded = false, ctlLoaded = false;
+let unit = decodeURIComponent(location.hash.slice(1)) || null;
+function selectUnit(name) {
+  unit = name; location.hash = encodeURIComponent(name);
+  ctlLoaded = false; paramsLoaded = false; faultsBuilt = false;
+  refresh();
+}
 
 function tempColor(t) {
   const x = Math.max(0, Math.min(1, (t - 60) / 120));
@@ -201,7 +223,7 @@ function tempColor(t) {
   return `rgb(${lerp(60, 220)},${lerp(120, 50)},${lerp(220, 40)})`;
 }
 async function post(url, body) {
-  await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({unit, ...body})});
   refresh();
 }
 function setController() {
@@ -241,12 +263,25 @@ function toggleFault(name, active) {
 
 async function refresh() {
   let s;
-  try { s = await (await fetch('/api/state')).json(); } catch (e) { $('simtime').textContent = 'disconnected'; return; }
-  const g = s.signals, sim = s.simulator;
-  $('title').textContent = sim.name;
-  $('devmeta').textContent = `BACnet device ${sim.device_instance} · ${sim.address} · ${sim.description}`;
-  const t = Math.round(sim.sim_time);
-  $('simtime').textContent = `sim time ${Math.floor(t/3600)}h ${String(Math.floor(t/60)%60).padStart(2,'0')}m ${String(t%60).padStart(2,'0')}s · ${sim.speed}× speed`;
+  try {
+    const r = await fetch('/api/state' + (unit ? '?unit=' + encodeURIComponent(unit) : ''));
+    if (r.status === 404 && unit) { unit = null; return refresh(); }
+    s = await r.json();
+  } catch (e) { $('simtime').textContent = 'disconnected'; return; }
+  const g = s.signals, u = s.unit, h = s.host;
+  unit = u.name;
+  $('hostname').textContent = h.name;
+  $('hostmeta').textContent = `router device ${h.device_instance} · ${h.address} · IP network ${h.ip_network} → virtual network ${h.virtual_network}`;
+  $('tabs').innerHTML = h.units.map(x => {
+    const cls = x.active_faults ? 'fault' : x.writes_ok === true ? 'ok' : x.writes_ok === false ? 'bad' : '';
+    return `<button class="${x.name === u.name ? 'sel' : ''}" onclick="selectUnit('${x.name}')" title="device ${x.device_instance} at ${x.address}">
+      <span class="dot ${cls}"></span>${x.name}</button>`;
+  }).join('');
+  $('title').textContent = u.name;
+  $('devmeta').textContent = `BACnet device ${u.device_instance} · ${u.address} · ${u.description}`;
+  const t = Math.round(u.sim_time);
+  $('simtime').textContent = `sim time ${Math.floor(t/3600)}h ${String(Math.floor(t/60)%60).padStart(2,'0')}m ${String(t%60).padStart(2,'0')}s · ${h.speed}× speed`;
+  const sim = {speed: h.speed};
 
   // schematic
   $('pipe_branch').setAttribute('stroke', tempColor(g.hw_branch_temp));
@@ -277,7 +312,9 @@ async function refresh() {
   const c = s.controller;
   if (!ctlLoaded) { $('ctl_id').value = c.device_instance; $('ctl_addr').value = c.address || ''; ctlLoaded = true; }
   $('ctl_status').textContent = c.status;
-  $('writes').innerHTML = c.points.map(p => `<tr><td>${p.name}</td><td>${shortObj(p.object)}${p.priority ? ' @' + p.priority : ''}</td>
+  $('writes').innerHTML = c.points.map(p => `<tr><td>${p.name}</td>
+    <td>${p.object_name ? `<b>${p.object_name}</b><br><span class="muted">${p.object ? shortObj(p.object) + ' (' + p.found_by + ')' : 'not resolved'}</span>`
+        : (p.object ? shortObj(p.object) : '—')}${p.priority ? ' @' + p.priority : ''}</td>
     <td class="v">${fmt(p.last_value)}</td>
     <td>${p.ok === true ? '<span class="pill on">OK</span>' : p.ok === false ? '<span class="pill err">FAIL</span>' : '<span class="pill">—</span>'}
     <span class="muted">${p.writes} writes${p.age != null ? ', ' + p.age + 's ago' : ''}</span>
@@ -297,6 +334,11 @@ async function refresh() {
     const row = $('fr_' + f.name); if (row) row.classList.toggle('active', f.active);
   }
   if (!paramsLoaded) { $('p_oat').value = s.params.oat; $('p_hw').value = s.params.hw_supply_temp; $('p_speed').value = sim.speed; paramsLoaded = true; }
+
+  $('demo_panel').hidden = !h.demo;
+  if (h.demo) $('demo').innerHTML = h.demo_controllers.map(d => `<p><b>Device ${d.device_instance}</b>
+    ${d.thermostats.map(t => `<span class="pill ${t.call ? 'on' : ''}">${t.label}: ${t.call ? 'heat call' : 'satisfied'}</span>`).join(' ')}</p>
+    <table><tbody>${d.points.map(p => `<tr><td>${p.name}</td><td class="muted">${shortObj(p.object)}${p.out_of_service ? ' · OOS' : ''}</td><td class="v">${fmt(p.value)}</td></tr>`).join('')}</tbody></table>`).join('');
 
   $('log').innerHTML = s.events.map(e => `<div><span class="muted">${e.t}</span> ${e.text}</div>`).join('');
 }

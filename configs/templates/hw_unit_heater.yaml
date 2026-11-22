@@ -1,27 +1,20 @@
 # ===========================================================================
-#  UH-1  Hot water unit heater simulator
+#  Template: hot water unit heater (2-position valve, aquastat fan interlock)
 # ===========================================================================
+#  Shared points list for every unit heater instance.  Instances fill in
+#  the {n} placeholder (and anything else in {braces}) from their `vars`.
+#
 #  Points list (as installed):
-#    ALC controller -> simulator  : HW valve command        (simulator BO-1)
-#    simulator -> ALC controller  : Fan amps, CT 0-10 A     (ALC AI:1, out of service)
-#    simulator -> ALC controller  : Space temperature       (ALC AV:1)
+#    ALC controller -> simulator : HW valve command      (simulator BO-1)
+#    simulator -> ALC controller : Fan amps, CT 0-10 A   (ALC object fan_amps_{n}, out of service)
+#    simulator -> ALC controller : Zone temperature      (ALC object zone_temp_{n})
 #
 #  Change orders: add/remove entries under `commands`, `monitor` and
-#  `controller.writes`.  Every available signal is listed at the bottom.
+#  `controller.writes`.  Available signals are listed at the bottom.
 # ===========================================================================
 
-simulator:
-  name: UH-1-SIM
-  device_instance: 4010001            # simulator's own BACnet device instance
-  address: 192.168.1.51/24            # simulator's own BACnet/IP address (port 47808 default)
-  description: Hot water unit heater simulator
-  model_name: HW Unit Heater Sim
-  location: Training Lab
-  speed: 1.0                          # 1.0 = real time
-  step: 0.1                           # s between simulation updates
-
-web:
-  port: 8080                          # http://<host>:8080
+model_name: HW Unit Heater Sim
+description: Hot water unit heater simulator
 
 equipment:
   type: hw_unit_heater
@@ -46,22 +39,26 @@ commands:
     relinquish_default: false
 
 # --- Values the simulator writes into the ALC controller --------------------
+#  object_name: the BACnet object name in the ALC controller (looked up by
+#               reading the controller's object list, or Who-Has)
+#  object:      use a fixed object ID instead of a name, e.g. analog-input,1
+#  demo_object: only used by --demo to create the object in the mock controller
 controller:
-  device_instance: 240110             # <-- ALC controller device ID (trainee design)
-  address:                            # blank = find with Who-Is; or e.g. 192.168.1.20
   min_interval: 1.0                   # s, minimum time between writes of one point
   writes:
     - name: Fan amps
       signal: fan_amps
-      object: analog-input,1          # fixed object ID (input is Out_Of_Service)
+      object_name: "fan_amps_{n}"
+      demo_object: "analog-input,{n}"
       deadband: 0.05                  # A
       heartbeat: 30                   # s, rewrite even if unchanged
-    - name: Space temp
+    - name: Zone temp
       signal: space_temp
-      object: analog-value,1          # fixed object ID
+      object_name: "zone_temp_{n}"
+      demo_object: "analog-value,{n}"
       deadband: 0.1                   # F
       heartbeat: 30
-      # priority: 16                  # only if the AV is commandable
+      # priority: 16                  # only if the object is commandable
 
 # --- Read-only troubleshooting points on the simulator ----------------------
 monitor:

@@ -1,19 +1,38 @@
 # HVAC Equipment Training Simulators
 
 Virtual HVAC equipment that behaves like the real thing on a BACnet/IP
-network. Trainees program real Automated Logic (ALC) controllers. The
-controller commands the simulator over BACnet, and the simulator writes its
-sensor values back into the controller's out-of-service inputs.
+network. Trainees program real Automated Logic (ALC) controllers. Each
+controller commands its simulated equipment over BACnet, and the simulator
+writes sensor values back into the controller's out-of-service inputs,
+which it finds by **BACnet object name**.
+
+## Network layout: many instances on one IP
+
+Each simulator host (one machine, one IP address) is a **BACnet router** to
+a virtual network. Every equipment instance is a separate BACnet device on
+that network, the same way MS/TP devices sit behind a router:
 
 ```
- ┌─────────────────────────┐   WriteProperty BO-1 (network output)   ┌──────────────────────┐
- │  ALC controller 240110  │ ──────────────────────────────────────▶ │  UH-1-SIM  4010001   │
- │  (trainee's logic)      │                                         │  physics + safeties  │
- │                         │ ◀────────────────────────────────────── │                      │
- │  AI:1 fan amps (OOS)    │   WriteProperty AI:1, AV:1 present-value│  web UI :8080        │
- │  AV:1 space temp        │                                         │  fault injection     │
- └─────────────────────────┘                                         └──────────────────────┘
+ Lab LAN (BACnet/IP, network 1)
+ ├── ALC controller 240110          fan_amps_1 (AI, OOS)  zone_temp_1
+ │                                  fan_amps_2 (AI, OOS)  zone_temp_2
+ └── SIM-HOST-1 192.168.1.51:47808  router, device 4010000
+      └── virtual network 5001
+           ├── UH-1-SIM  device 4010001  address 5001:1   BO-1 HWV_CMD …
+           └── UH-2-SIM  device 4010002  address 5001:2   BO-1 HWV_CMD …
 ```
+
+- WebCTRL discovers the router and every instance with a normal Who-Is.
+- The ALC network output writes `BO-1` of device 4010001 (or 4010002, …).
+- Each instance writes its values to the controller objects named in its
+  config, e.g. `fan_amps_1` and `zone_temp_1`.
+
+### Network numbers (important)
+
+| Setting | Rule |
+|---|---|
+| `host.ip_network` | The BACnet network number of the lab IP network. **It must match the number the ALC system uses** for that IP network, or routing breaks. |
+| `host.virtual_network` | Must be **unique in the whole BACnet internetwork**: different on every simulator host, and not used by any ALC router or MS/TP network. |
 
 ## Equipment available
 
@@ -25,17 +44,54 @@ sensor values back into the controller's out-of-service inputs.
 
 ```bash
 pip install -r requirements.txt
-python -m hvacsim configs/uh-1.yaml
+python -m hvacsim configs/station-1.yaml
 ```
 
-Open `http://<host>:8080` to see the equipment animation, BACnet point status
-and priority array, event log, and fault injection.
+Open `http://<host>:8080`. One page covers every instance on the host, with a
+tab per unit showing:
+- the equipment animation
+- controller write status (object name → resolved object ID)
+- the priority array
+- fault injection
+- the event log
 
-Useful overrides (no YAML edit needed):
+**Demo mode** needs no network or controllers. The simulator runs mock ALC
+controllers in-process, with the named objects and a 68 °F thermostat per
+unit:
 
 ```bash
-python -m hvacsim configs/uh-1.yaml --controller-id 240110 --address 192.168.1.51/24 --speed 10
+python -m hvacsim configs/station-1.yaml --demo --speed 20
 ```
+
+Useful overrides:
+
+```bash
+python -m hvacsim configs/station-1.yaml --address 192.168.1.51/24 --controller UH-1-SIM=240115 --speed 10
+```
+
+## Config files
+
+```
+configs/station-1.yaml               the host: router, network numbers, instances
+configs/templates/hw_unit_heater.yaml  shared points list for unit heaters
+```
+
+An instance references a template and fills in its placeholders:
+
+```yaml
+instances:
+  - name: UH-1-SIM
+    template: templates/hw_unit_heater.yaml
+    device_instance: 4010001
+    mac: 1                      # address 5001:1 on the virtual network
+    vars: { n: 1 }              # template "fan_amps_{n}" -> fan_amps_1
+    controller:
+      device_instance: 240110
+```
+
+Anything an instance sets is merged over the template, such as `equipment.params`
+and `controller`. A `commands` or `monitor` list on an instance replaces the
+template's list.
 
 ## Unit heater sequence (what the simulator does physically)
 
@@ -44,50 +100,62 @@ python -m hvacsim configs/uh-1.yaml --controller-id 240110 --address 192.168.1.5
    pipe. The aquastat on the HW supply closes at **90 °F**, which energizes the
    fan motor. The controller has no fan command.
 3. The motor draws inrush current, then settles at about **2.0 A**. The CT
-   reading (0-10 A) is written to **ALC AI:1**.
-4. The space warms up. Space temp is written to **ALC AV:1**.
+   reading (0-10 A) is written to **`fan_amps_{n}`**.
+4. The space warms up. Space temp is written to **`zone_temp_{n}`**.
 5. When the valve closes, the coil and pipe cool down. The fan **keeps running
    until the aquastat opens at 80 °F**, which takes several minutes.
 
-## Points
+## Points (per unit heater instance)
 
 | Direction | Object | Name | Notes |
 |---|---|---|---|
 | ALC → sim | sim `BO-1` | HWV_CMD | Commandable, 16-level priority array, relinquish default = Closed |
-| sim → ALC | ALC `AI:1` | Fan amps | 0-10 A scaled value. AI must be Out_Of_Service |
-| sim → ALC | ALC `AV:1` | Space temp | °F |
+| sim → ALC | object named `fan_amps_{n}` | Fan amps | 0-10 A scaled value. The input must be Out_Of_Service |
+| sim → ALC | object named `zone_temp_{n}` | Zone temp | °F |
 | read-only | sim `AV-101…107`, `BV-101…102` | Monitor points | True space temp, pipe temp, coil temp, valve %, motor amps, heat output, OAT, aquastat, fan running |
 
-Writes to the controller happen **on change** (deadband 0.05 A / 0.1 °F) and on
-a **30 s heartbeat**, with at least 1 s between writes of the same point. This
-keeps traffic low when many simulators share the lab network.
+Writes happen **on change** (deadband 0.05 A / 0.1 °F) and on a **30 s
+heartbeat**, with at least 1 s between writes of the same point.
 
-## Changing the controller's device ID
+### How object names are found
 
-Part of the training is designing the ALC system, so the target controller
-can be changed three ways. The input object IDs (AI:1, AV:1) stay fixed.
+1. The simulator reads the controller's **object list and object names**
+   once. This scan is shared by every instance on the host that uses that
+   controller, and the result is cached.
+2. If the object list can't be read, it falls back to **Who-Has** by object name.
+3. If a write returns `unknown-object` (the trainee deleted or renumbered the
+   object), the name is looked up again.
+4. A name that doesn't exist yet shows on the web page as
+   `object name 'zone_temp_3' not found in device 240110`. It's retried
+   every 10 s, so it starts working as soon as the trainee creates the object.
 
-1. **Web UI:** in the *Controller link* panel, enter the device ID and click Apply. This takes effect immediately and is not saved.
-2. **Command line:** `--controller-id 240115`
-3. **YAML:** `controller.device_instance` in the config file. This is the permanent change.
+A fixed object ID still works: use `object: analog-input,1` instead of
+`object_name:` in a write.
 
-If `controller.address` is blank, the simulator finds the controller with
-**Who-Is/I-Am**. Enter an IP address only if broadcasts can't reach it,
-for example across subnets without a BBMD.
+## Changing a controller's device ID
+
+Part of the training is designing the ALC system:
+
+1. **Web UI:** on a unit's tab, use the *Controller link* panel. This takes effect immediately and is not saved.
+2. **Command line:** `--controller UH-1-SIM=240115` (repeatable)
+3. **YAML:** `controller.device_instance` on the instance. This is the permanent change.
+
+If `controller.address` is blank, the controller is found with Who-Is
+through the router. Enter a plain IP (e.g. `192.168.1.20`) to skip
+discovery. It's automatically qualified with `ip_network`.
 
 ## Setting up the ALC side
 
-- **Valve command:** in the trainee's logic, the heat call drives both the
-  physical BO and a **BACnet binary network output microblock** that writes
-  `present-value` of **device 4010001, binary-output 1**. Use whatever
-  priority your standard calls for. The simulator's web page shows which
-  priority slot is active, which helps when a point "won't release."
-- **Fan amps:** AI:1 is configured for a 0-5 V transducer scaled 0-10 A.
-  Set AI:1 **Out_Of_Service = True** so the simulator can write
-  Present_Value. If a download or reboot puts it back in service, the
-  simulator page shows `write-access-denied - is the input still Out_Of_Service?`.
-- **Space temp:** AV:1. If the AV is commandable in your program, set
-  `priority:` on that write in the YAML.
+- **Valve command:** the heat call drives the physical BO and a **BACnet
+  binary network output** that writes `present-value` of **device 4010001,
+  binary-output 1** at the priority your standard calls for.
+- **Fan amps:** the 0-5 V CT input, scaled 0-10 A and named **`fan_amps_1`**,
+  set **Out_Of_Service = True**. If a download puts it back in service, the
+  page shows `write-access-denied - is the input still Out_Of_Service?`.
+- **Zone temp:** an object named **`zone_temp_1`**. If it's commandable, set
+  `priority:` on that write.
+- **Network:** make sure the WebCTRL network number for the lab IP network
+  equals `host.ip_network`.
 
 ## Faults the instructor can inject
 
@@ -100,49 +168,45 @@ for example across subnets without a BBMD.
 | CT | Reads 0 A, reads full scale |
 | Space sensor | Offset, open circuit |
 
-## Change orders (adding or removing points)
+## Change orders
 
-Points are defined entirely in the YAML. Code changes are not needed. See
-[docs/CHANGE_ORDERS.md](docs/CHANGE_ORDERS.md) for worked examples:
-- adding a HW supply temp sensor
-- adding a fan start/stop relay
-- monitoring the aquastat as a BI
+Points are defined entirely in YAML. See
+[docs/CHANGE_ORDERS.md](docs/CHANGE_ORDERS.md).
 
 ## Lab deployment
 
-- **One IP per simulator, port 47808.** That's how real equipment looks to
-  WebCTRL, and it lets Who-Is work. On a Linux host, add secondary addresses
-  to the lab NIC (`ip addr add 192.168.1.51/24 dev eth0`, …) and run one
-  process per config. On Windows, add addresses under the adapter's
-  Advanced TCP/IP settings.
+- **One process per host, one IP per host, port 47808.** Add instances to the
+  host config instead of running more processes.
 - **Device instance plan:** keep simulator instances out of the ALC range,
-  e.g. `40SSUUU` (SS = station, UUU = unit), so UH-1 at station 1 is `4010001`.
-- **Web port:** give each simulator its own web port if they share a host.
+  e.g. `40SSUUU` (SS = station, UUU = unit, 000 = router).
+- **Virtual network plan:** e.g. 5000 + station number.
 
-## Testing without a controller
-
-`tools/mock_alc.py` stands in for the ALC controller: AI:1 out of service,
-AV:1, a 68 °F setpoint and a heating logic block that writes the
-simulator's BO-1.
-
-Run the simulator and the mock controller in two terminals:
-
-```bash
-python -m hvacsim configs/uh-1.yaml --address 192.168.1.51/24 --controller-address 192.168.1.20
-```
-
-```bash
-python tools/mock_alc.py --address 192.168.1.20/24 --sim-address 192.168.1.51 --priority 10
-```
-
-Automated tests (model physics + a full BACnet loop on localhost):
+## Testing
 
 ```bash
 python -m pytest -q
 ```
 
-YABE (free) is useful for browsing the simulator's objects and writing BO-1
-by hand at different priorities.
+The tests run the router, instances and mock controllers on an in-process
+network. They check:
+- discovery through the router
+- writes to individual units at a priority
+- object-name lookup by object list and by Who-Has
+- missing names
+- out-of-service rejection
+- retargeting a unit to another controller
+- relinquish
+
+**Testing on a real network:** `tools/mock_alc.py` puts a fake controller
+240110 on the network, with `fan_amps_1/2`, `zone_temp_1/2` and thermostats
+writing to devices 4010001/2:
+
+```bash
+python tools/mock_alc.py --address 192.168.1.20/24
+```
+
+Run it on a **different machine** from the simulator host. Several BACnet
+programs on one Linux machine don't reliably share broadcasts on port 47808.
 
 ## Code layout
 
@@ -150,14 +214,15 @@ by hand at different priorities.
 hvacsim/
   models/base.py         EquipmentModel: inputs, signals, faults, params (no BACnet)
   models/unit_heater.py  HW unit heater physics and sequence
-  bacnet_io.py           BACnet server objects + client writes into the controller
-  runner.py              Loads YAML, runs the simulation loop
-  web.py, static/        Instructor/trainee web page
-configs/uh-1.yaml        Unit heater points list and parameters
-tools/mock_alc.py        Fake ALC controller for testing
+  config.py              Host config, templates, {placeholders}, validation
+  bacnet_io.py           Router, per-instance devices, name lookup, controller writes
+  runner.py              Host + instances, simulation loop, demo mode
+  mockalc.py             Mock ALC controller (demo mode, tests, tools/mock_alc.py)
+  web.py, static/        Web page
+configs/                 Host configs and equipment templates
+tools/mock_alc.py        Fake ALC controller on a real network
 tests/                   pytest suite
 ```
 
-To add new equipment, subclass `EquipmentModel`, declare its INPUTS, SIGNALS,
-FAULTS and DEFAULTS, register it in `hvacsim/models/__init__.py`, and write a
-YAML points list.
+To add new equipment, subclass `EquipmentModel`, register it in
+`hvacsim/models/__init__.py`, and write a template.
