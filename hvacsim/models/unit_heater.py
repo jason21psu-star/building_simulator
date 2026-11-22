@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 
-from .base import EquipmentModel, FaultDef, SignalDef
+from .base import EquipmentModel, FaultDef, ParamInfo, SignalDef
 
 
 def _approach(value: float, target: float, h: float, tau: float) -> float:
@@ -88,6 +88,12 @@ class HotWaterUnitHeater(EquipmentModel):
         "internal_gain": 500.0,         # BTU/h, lights, people, equipment
         "initial_space_temp": 64.0,     # F
         "sensor_noise": 0.03,           # F
+    }
+
+    CONDITIONS = ["oat", "hw_supply_temp"]
+    PARAM_INFO = {
+        "oat": ParamInfo("", "OA temp", units="°F", minimum=-40, maximum=120),
+        "hw_supply_temp": ParamInfo("", "HW supply", units="°F", minimum=40, maximum=250),
     }
 
     INPUTS = [

@@ -56,6 +56,7 @@ class MockController:
         self.device_instance = int(device_instance)
         self.app = Application.from_object_list([_device(device_instance, name, modelName="Mock ALC controller"), port])
         self.thermostats: List[Thermostat] = []
+        self.outputs: List[Dict[str, Any]] = []
         self._next_av = 100
 
     # ----- objects ------------------------------------------------------
@@ -89,6 +90,11 @@ class MockController:
         self._next_av += 1
         self.thermostats.append(t)
 
+    def add_network_output(self, device: int, objid: str, value: Any, priority: int = 10, label: str = "") -> None:
+        """A fixed network output to a simulator (demo): rewritten every 10 s."""
+        self.outputs.append({"device": device, "object": objid, "value": value, "priority": priority,
+                             "label": label, "address": None, "status": ""})
+
     def value(self, object_name: str) -> Any:
         obj = self.app.objectName.get(object_name)
         if obj is None:
@@ -108,10 +114,32 @@ class MockController:
         t.status = f"simulator device {t.target_device} not found"
         return False
 
+    async def _network_outputs(self) -> None:
+        for o in self.outputs:
+            try:
+                if o["address"] is None:
+                    i_ams = await self.app.who_is(o["device"], o["device"], timeout=3)
+                    if not i_ams:
+                        o["status"] = f"device {o['device']} not found"
+                        continue
+                    o["address"] = str(i_ams[0].pduSource)
+                oid = parse_objid(o["object"])
+                v = o["value"]
+                pv = (BinaryPV.active if v else BinaryPV.inactive) if str(oid[0]).startswith("binary") else Real(float(v))
+                await self.app.write_property(Address(o["address"]), oid, "present-value", pv, priority=o["priority"])
+                o["status"] = f"wrote {v} @ {o['priority']}"
+            except (Exception, ErrorRejectAbortNack) as err:
+                o["status"] = f"failed: {describe_error(err)}"
+                o["address"] = None
+
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
+        tick = 0
         while True:
             await asyncio.sleep(1.0)
+            if self.outputs and tick % 10 == 0:
+                await self._network_outputs()
+            tick += 1
             for t in self.thermostats:
                 temp = self.value(t.zone_object) or 0.0
                 sp_obj = self.app.objectName.get(f"{t.label}_htg_sp")
@@ -147,4 +175,6 @@ class MockController:
             "device_instance": self.device_instance,
             "points": points,
             "thermostats": [{"label": t.label, "call": t.call, "status": t.status} for t in self.thermostats],
+            "outputs": [{"label": o["label"], "object": o["object"], "value": o["value"], "status": o["status"]}
+                        for o in self.outputs],
         }

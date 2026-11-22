@@ -46,12 +46,15 @@
            color: var(--ink); font: inherit; cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .faults { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 4px 16px; }
+  summary.fgroup { cursor: pointer; padding: 4px 0; }
   .fgroup { font-size: 12px; color: var(--muted); margin-top: 8px; grid-column: 1 / -1; }
   .fault { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
   .fault.active label { color: var(--bad); font-weight: 600; }
   .fault input[type=number] { width: 70px; }
   .log { max-height: 220px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
   .muted { color: var(--muted); }
+  .pid { font: 12px ui-monospace, Menlo, Consolas, monospace; color: var(--muted); min-width: 44px; }
+  select { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
   .err-text { color: var(--bad); font-size: 12px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #fanblades { transform-box: fill-box; transform-origin: center; }
@@ -77,74 +80,12 @@
   <div class="stack">
     <section class="panel">
       <h2>Equipment</h2>
-      <svg viewBox="0 0 640 360" role="img" aria-label="Hot water unit heater schematic">
-        <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill="var(--warn)"/>
-          </marker>
-        </defs>
-        <!-- HW supply line -->
-        <text x="18" y="70" class="svglabel">HW SUPPLY</text>
-        <line id="pipe_branch" x1="18" y1="84" x2="150" y2="84" stroke-width="10" stroke-linecap="round"/>
-        <line id="pipe_supply" x1="190" y1="84" x2="330" y2="84" stroke-width="10"/>
-        <line id="pipe_supply2" x1="330" y1="84" x2="330" y2="120" stroke-width="10"/>
-        <!-- valve (bowtie) -->
-        <g id="valve">
-          <path d="M150,70 L190,98 L190,70 L150,98 Z" stroke="var(--ink)" stroke-width="1.5" id="valvebody"/>
-          <rect x="160" y="40" width="20" height="22" rx="3" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2"/>
-          <line x1="170" y1="62" x2="170" y2="84" stroke="var(--ink)" stroke-width="1.5"/>
-        </g>
-        <text x="146" y="122" class="svglabel">2-POS VALVE</text>
-        <text x="146" y="138" class="svgtext" id="t_valve"></text>
-        <!-- aquastat -->
-        <rect x="236" y="72" width="44" height="24" rx="4" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2" id="aq_box"/>
-        <text x="258" y="88" text-anchor="middle" class="svglabel">AQ</text>
-        <text x="216" y="30" class="svglabel" id="t_aqsp">AQUASTAT</text>
-        <text x="216" y="48" class="svgtext" id="t_aq"></text>
-        <text x="216" y="114" class="svgtext" id="t_pipe"></text>
-        <!-- unit heater cabinet -->
-        <rect x="300" y="120" width="190" height="150" rx="6" fill="none" stroke="var(--ink)" stroke-width="2"/>
-        <!-- coil -->
-        <rect id="coil" x="314" y="132" width="34" height="126" rx="3"/>
-        <g stroke="var(--panel)" stroke-width="1.5" opacity=".7">
-          <line x1="314" y1="146" x2="348" y2="146"/><line x1="314" y1="160" x2="348" y2="160"/>
-          <line x1="314" y1="174" x2="348" y2="174"/><line x1="314" y1="188" x2="348" y2="188"/>
-          <line x1="314" y1="202" x2="348" y2="202"/><line x1="314" y1="216" x2="348" y2="216"/>
-          <line x1="314" y1="230" x2="348" y2="230"/><line x1="314" y1="244" x2="348" y2="244"/>
-        </g>
-        <text x="331" y="286" text-anchor="middle" class="svglabel">COIL</text>
-        <text x="331" y="302" text-anchor="middle" class="svgtext" id="t_coil"></text>
-        <!-- fan -->
-        <circle cx="420" cy="195" r="52" fill="none" stroke="var(--line)" stroke-width="2"/>
-        <g id="fanblades" fill="var(--muted)">
-          <path d="M420,195 C405,165 420,148 432,152 C440,160 430,180 420,195 Z"/>
-          <path d="M420,195 C450,180 467,195 463,207 C455,215 435,205 420,195 Z"/>
-          <path d="M420,195 C435,225 420,242 408,238 C400,230 410,210 420,195 Z"/>
-          <path d="M420,195 C390,210 373,195 377,183 C385,175 405,185 420,195 Z"/>
-          <circle cx="420" cy="195" r="7" fill="var(--ink)"/>
-        </g>
-        <!-- motor + CT -->
-        <rect x="500" y="178" width="46" height="34" rx="5" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2" id="motor"/>
-        <text x="523" y="199" text-anchor="middle" class="svglabel">M</text>
-        <line x1="546" y1="195" x2="600" y2="195" stroke="var(--ink)" stroke-width="1.5"/>
-        <circle cx="575" cy="195" r="9" fill="none" stroke="var(--accent)" stroke-width="3"/>
-        <text x="560" y="174" class="svglabel">CT 0-10 A</text>
-        <text x="560" y="230" class="svgbig" id="t_amps"></text>
-        <text x="500" y="250" class="svgtext" id="t_motor"></text>
-        <!-- warm air -->
-        <g id="air" color="var(--warn)" stroke="var(--warn)" stroke-width="2.5" fill="none">
-          <line x1="360" y1="290" x2="360" y2="330" marker-end="url(#arrow)"/>
-          <line x1="420" y1="290" x2="420" y2="335" marker-end="url(#arrow)"/>
-          <line x1="480" y1="290" x2="480" y2="330" marker-end="url(#arrow)"/>
-        </g>
-        <!-- space sensor -->
-        <rect x="40" y="220" width="60" height="70" rx="8" fill="var(--chip)" stroke="var(--ink)" stroke-width="1.2"/>
-        <text x="70" y="250" text-anchor="middle" class="svgbig" id="t_space"></text>
-        <text x="70" y="272" text-anchor="middle" class="svglabel">SPACE</text>
-        <text x="40" y="312" class="svglabel" id="t_space_actual"></text>
-        <text x="40" y="330" class="svglabel" id="t_oat"></text>
-        <text x="300" y="350" class="svgtext" id="t_q"></text>
-      </svg>
+      <div id="equip"></div>
+    </section>
+
+    <section class="panel" id="params_panel" hidden>
+      <h2 id="params_title">Parameters</h2>
+      <div id="params"></div>
     </section>
 
     <section class="panel">
@@ -193,8 +134,7 @@
     <section class="panel">
       <h2>Conditions</h2>
       <div class="row">
-        <label>OA temp °F <input type="number" id="p_oat" step="1"></label>
-        <label>HW supply °F <input type="number" id="p_hw" step="5"></label>
+        <span class="row" id="cond"></span>
         <label>Speed × <input type="number" id="p_speed" step="1" min="0"></label>
         <button onclick="applyParams()">Apply</button>
       </div>
@@ -209,11 +149,11 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let faultsBuilt = false, paramsLoaded = false, ctlLoaded = false;
+let faultsBuilt = false, paramsLoaded = false, ctlLoaded = false, paramsBuilt = false;
 let unit = decodeURIComponent(location.hash.slice(1)) || null;
 function selectUnit(name) {
   unit = name; location.hash = encodeURIComponent(name);
-  ctlLoaded = false; paramsLoaded = false; faultsBuilt = false;
+  ctlLoaded = false; paramsLoaded = false; faultsBuilt = false; paramsBuilt = false;
   refresh();
 }
 
@@ -229,10 +169,57 @@ async function post(url, body) {
 function setController() {
   post('/api/controller', {device_instance: parseInt($('ctl_id').value), address: $('ctl_addr').value.trim()});
 }
-function applyParams() {
-  post('/api/param', {name: 'oat', value: parseFloat($('p_oat').value)});
-  post('/api/param', {name: 'hw_supply_temp', value: parseFloat($('p_hw').value)});
+async function applyParams() {
+  for (const el of document.querySelectorAll('#cond input')) {
+    await post('/api/param', {name: el.dataset.param, value: parseFloat(el.value)});
+  }
   post('/api/param', {name: 'speed', value: parseFloat($('p_speed').value)});
+}
+async function setParam(name, value) {
+  const r = await fetch('/api/param', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                       body: JSON.stringify({unit, name, value})});
+  if (!r.ok) alert(await r.text());
+  paramsBuilt = false;
+  refresh();
+}
+function keypad(action, value) { post('/api/action', {action, value}); }
+
+// ----- equipment views (hvacsim/static/views/<type>.js) -----
+const VIEWS = {};
+let currentView = null;
+function loadView(type) {
+  return new Promise(resolve => {
+    if (VIEWS[type]) return resolve();
+    const el = document.createElement('script');
+    el.src = '/views/' + type + '.js';
+    el.onload = resolve; el.onerror = resolve;
+    document.head.appendChild(el);
+  });
+}
+function buildParams(s) {
+  const items = s.param_info.filter(p => p.id);
+  $('params_panel').hidden = !items.length;
+  if (!items.length) return;
+  $('params_title').textContent = 'Parameters (' + items.length + ')';
+  const open = new Set([...document.querySelectorAll('#params details[open]')].map(d => d.dataset.group));
+  let html = '', group = '';
+  for (const p of items) {
+    if (p.group !== group) {
+      if (group) html += '</details>';
+      group = p.group;
+      html += `<details data-group="${group}" ${open.has(group) ? 'open' : ''}><summary class="fgroup">${group}</summary>`;
+    }
+    let ctl;
+    if (p.choices) {
+      ctl = `<select onchange="setParam('${p.name}', this.value)">` + p.choices.map(c =>
+        `<option value="${c}" ${String(c) === String(p.value) ? 'selected' : ''}>${c}</option>`).join('') + '</select>';
+    } else {
+      ctl = `<input type="number" step="any" value="${p.value}" onchange="setParam('${p.name}', this.value)"> <span class="muted">${p.units}</span>`;
+    }
+    html += `<div class="fault"><span class="pid">${p.id}</span><label style="flex:1">${p.label}</label>${ctl}</div>`;
+  }
+  $('params').innerHTML = html + (group ? '</details>' : '');
+  paramsBuilt = true;
 }
 function shortObj(o) {
   const map = {'analog-input':'AI','analog-output':'AO','analog-value':'AV','binary-input':'BI',
@@ -283,30 +270,13 @@ async function refresh() {
   $('simtime').textContent = `sim time ${Math.floor(t/3600)}h ${String(Math.floor(t/60)%60).padStart(2,'0')}m ${String(t%60).padStart(2,'0')}s · ${h.speed}× speed`;
   const sim = {speed: h.speed};
 
-  // schematic
-  $('pipe_branch').setAttribute('stroke', tempColor(g.hw_branch_temp));
-  $('pipe_supply').setAttribute('stroke', tempColor(g.pipe_temp));
-  $('pipe_supply2').setAttribute('stroke', tempColor(g.pipe_temp));
-  $('coil').setAttribute('fill', tempColor(g.coil_temp));
-  $('valvebody').setAttribute('fill', g.valve_position > 50 ? 'var(--ok)' : 'var(--chip)');
-  $('t_valve').textContent = `${g.valve_position.toFixed(0)}% open`;
-  $('t_pipe').textContent = `${g.pipe_temp.toFixed(1)}°F`;
-  $('t_aqsp').textContent = `AQUASTAT on ${s.params.aquastat_close_temp}°F / off ${s.params.aquastat_open_temp}°F`;
-  $('aq_box').setAttribute('fill', g.aquastat_closed ? 'color-mix(in srgb, var(--ok) 35%, transparent)' : 'var(--chip)');
-  $('t_aq').textContent = g.aquastat_closed ? 'CLOSED - fan enabled' : 'OPEN';
-  $('t_coil').textContent = `${g.coil_temp.toFixed(0)}°F`;
-  const fb = $('fanblades');
-  fb.classList.toggle('run', g.fan_speed > 80);
-  fb.classList.toggle('coast', g.fan_speed > 1 && g.fan_speed <= 80);
-  $('t_amps').textContent = `${g.fan_amps.toFixed(2)} A`;
-  $('t_motor').textContent = g.protector_tripped ? 'THERMAL PROTECTOR OPEN'
-    : g.motor_energized ? (g.fan_running ? 'motor running' : 'motor energized, not turning') : 'motor off';
-  $('motor').setAttribute('stroke', g.protector_tripped ? 'var(--bad)' : 'var(--ink)');
-  $('air').style.opacity = Math.max(0.08, Math.min(1, g.heat_output / 20000) * (g.fan_speed / 100));
-  $('t_space').textContent = `${g.space_temp.toFixed(1)}°`;
-  $('t_space_actual').textContent = `actual ${g.space_temp_actual.toFixed(1)}°F`;
-  $('t_oat').textContent = `OA ${g.oat.toFixed(0)}°F`;
-  $('t_q').textContent = `heat output ${Math.round(g.heat_output).toLocaleString()} BTU/h`;
+  if (currentView !== u.name) {
+    await loadView(u.equipment);
+    $('equip').innerHTML = VIEWS[u.equipment] ? VIEWS[u.equipment].html : '<p class="muted">No view for ' + u.equipment + '</p>';
+    currentView = u.name;
+  }
+  if (VIEWS[u.equipment]) VIEWS[u.equipment].render(s);
+  if (!paramsBuilt) buildParams(s);
 
   // controller link
   const c = s.controller;
@@ -321,7 +291,8 @@ async function refresh() {
     ${p.last_error ? `<div class="err-text">${p.last_error}</div>` : ''}</td></tr>`).join('');
 
   // commands
-  $('commands').innerHTML = s.commands.map(cmd => `<tr><td><b>${cmd.name}</b><br><span class="muted">${shortObj(cmd.object)}</span></td>
+  $('commands').innerHTML = s.param_objects.map(pp => `<tr><td><b>${pp.name}</b><br><span class="muted">${shortObj(pp.object)}</span></td>
+    <td>${fmt(pp.value)}</td><td class="muted">parameter ${pp.param}</td></tr>`).join('') + s.commands.map(cmd => `<tr><td><b>${cmd.name}</b><br><span class="muted">${shortObj(cmd.object)}</span></td>
     <td>${fmt(cmd.present_value)}<br><span class="muted">${cmd.active_priority ? 'priority ' + cmd.active_priority : 'relinquish default'}</span></td>
     <td>${cmd.slots.length ? cmd.slots.map(x => `<span class="pill">${x.priority}: ${x.value === true ? 'ON' : x.value === false ? 'OFF' : x.value}</span>`).join(' ')
       : '<span class="muted">all NULL · default ' + (cmd.relinquish_default ? 'ON' : 'OFF') + '</span>'}</td></tr>`).join('');
@@ -333,11 +304,18 @@ async function refresh() {
     const cb = $('fc_' + f.name); if (cb) cb.checked = f.active;
     const row = $('fr_' + f.name); if (row) row.classList.toggle('active', f.active);
   }
-  if (!paramsLoaded) { $('p_oat').value = s.params.oat; $('p_hw').value = s.params.hw_supply_temp; $('p_speed').value = sim.speed; paramsLoaded = true; }
+  if (!paramsLoaded) {
+    $('cond').innerHTML = s.conditions.map(name => {
+      const i = s.param_info.find(p => p.name === name) || {label: name, units: ''};
+      return `<label>${i.label} ${i.units ? '(' + i.units + ')' : ''} <input type="number" step="any" data-param="${name}" value="${s.params[name]}"></label>`;
+    }).join('');
+    $('p_speed').value = sim.speed; paramsLoaded = true;
+  }
 
   $('demo_panel').hidden = !h.demo;
   if (h.demo) $('demo').innerHTML = h.demo_controllers.map(d => `<p><b>Device ${d.device_instance}</b>
-    ${d.thermostats.map(t => `<span class="pill ${t.call ? 'on' : ''}">${t.label}: ${t.call ? 'heat call' : 'satisfied'}</span>`).join(' ')}</p>
+    ${d.thermostats.map(t => `<span class="pill ${t.call ? 'on' : ''}">${t.label}: ${t.call ? 'heat call' : 'satisfied'}</span>`).join(' ')}
+    ${d.outputs.map(o => `<span class="pill">${o.label} ${shortObj(o.object)} = ${o.value}</span>`).join(' ')}</p>
     <table><tbody>${d.points.map(p => `<tr><td>${p.name}</td><td class="muted">${shortObj(p.object)}${p.out_of_service ? ' · OOS' : ''}</td><td class="v">${fmt(p.value)}</td></tr>`).join('')}</tbody></table>`).join('');
 
   $('log').innerHTML = s.events.map(e => `<div><span class="muted">${e.t}</span> ${e.text}</div>`).join('');

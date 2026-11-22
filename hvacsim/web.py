@@ -23,6 +23,13 @@ async def start_web(host, bind: str, port: int) -> web.AppRunner:
     async def index(_req):
         return web.FileResponse(STATIC / "index.html")
 
+    @routes.get("/views/{name}")
+    async def view(req):
+        path = (STATIC / "views" / req.match_info["name"]).resolve()
+        if path.parent != (STATIC / "views").resolve() or not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
+
     @routes.get("/api/host")
     async def host_state(_req):
         return web.json_response(host.host_state())
@@ -61,8 +68,13 @@ async def start_web(host, bind: str, port: int) -> web.AppRunner:
             host.paused = bool(value)
         else:
             unit = unit_of(body)
-            unit.model.set_param(name, value)
-            unit.event(f"parameter {name} = {value}")
+            try:
+                unit.model.set_param(name, value)
+            except (KeyError, ValueError) as err:
+                raise web.HTTPBadRequest(text=str(err))
+            info = unit.model.PARAM_INFO.get(name)
+            label = f"{info.id} {info.label}" if info and info.id else name
+            unit.event(f"parameter {label} = {unit.model.p[name]}")
         return web.json_response({"ok": True})
 
     @routes.post("/api/controller")
@@ -74,6 +86,17 @@ async def start_web(host, bind: str, port: int) -> web.AppRunner:
         if "device_instance" in body:
             unit.link.retarget(int(body["device_instance"]), body.get("address") or None)
             unit.event(f"controller target set to device {unit.link.device_instance}")
+        return web.json_response({"ok": True})
+
+    @routes.post("/api/action")
+    async def action(req):
+        body = await req.json()
+        unit = unit_of(body)
+        try:
+            unit.model.action(body["action"], body.get("value"))
+        except (KeyError, ValueError) as err:
+            raise web.HTTPBadRequest(text=str(err))
+        unit.event(f"keypad {body['action']}" + (f" {body['value']}" if body.get("value") is not None else ""))
         return web.json_response({"ok": True})
 
     @routes.post("/api/reset")

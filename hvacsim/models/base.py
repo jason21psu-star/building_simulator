@@ -40,6 +40,36 @@ class FaultDef:
 
 
 @dataclass
+class ParamInfo:
+    """Describes a parameter for the web page (e.g. a drive keypad parameter)."""
+    id: str            # e.g. "28.72" for a drive parameter, or "" for a plain setting
+    label: str
+    group: str = ""
+    units: str = ""
+    choices: Optional[List[str]] = None
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+
+
+def coerce(value: Any, like: Any) -> Any:
+    """Convert a value (often a string from the web page or YAML) to the type of `like`."""
+    if isinstance(like, bool):
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("1", "true", "yes", "on", "active"):
+                return True
+            if v in ("0", "false", "no", "off", "inactive", ""):
+                return False
+            raise ValueError(f"not a boolean: {value!r}")
+        return bool(value)
+    if isinstance(like, int) and not isinstance(like, bool):
+        return int(float(value))
+    if isinstance(like, float):
+        return float(value)
+    return type(like)(value)
+
+
+@dataclass
 class FaultState:
     active: bool = False
     value: Optional[float] = None
@@ -52,6 +82,9 @@ class EquipmentModel:
     INPUTS: List[SignalDef] = []
     SIGNALS: List[SignalDef] = []
     FAULTS: List[FaultDef] = []
+    PARAM_INFO: Dict[str, ParamInfo] = {}      # parameters shown/editable on the web page
+    CONDITIONS: List[str] = []                 # parameters shown in the "Conditions" panel
+    ACTIONS: List[str] = []                    # web page buttons, e.g. keypad Hand/Off/Auto
 
     # largest internal integration step (simulated seconds)
     MAX_SUBSTEP = 0.5
@@ -61,7 +94,9 @@ class EquipmentModel:
         unknown = set(params) - set(self.DEFAULTS)
         if unknown:
             raise ValueError(f"{self.TYPE}: unknown parameter(s) {sorted(unknown)}")
-        self.p: Dict[str, Any] = {**self.DEFAULTS, **params}
+        self.p: Dict[str, Any] = dict(self.DEFAULTS)
+        for k, v in params.items():
+            self.p[k] = self._checked(k, v)
         self.rng = random.Random(seed)
         self.sim_time = 0.0
         self.inputs: Dict[str, Any] = {d.name: d.default for d in self.INPUTS}
@@ -88,10 +123,26 @@ class EquipmentModel:
             raise KeyError(f"{self.TYPE}: no input named {name!r}")
         self.inputs[name] = value
 
+    def _checked(self, name: str, value: Any) -> Any:
+        value = coerce(value, self.DEFAULTS[name])
+        info = self.PARAM_INFO.get(name)
+        if info is not None:
+            if info.choices and value not in info.choices:
+                raise ValueError(f"{name}: {value!r} is not one of {info.choices}")
+            if info.minimum is not None and value < info.minimum:
+                raise ValueError(f"{name}: minimum is {info.minimum}")
+            if info.maximum is not None and value > info.maximum:
+                raise ValueError(f"{name}: maximum is {info.maximum}")
+        return value
+
     def set_param(self, name: str, value: Any) -> None:
         if name not in self.p:
             raise KeyError(f"{self.TYPE}: no parameter named {name!r}")
-        self.p[name] = type(self.DEFAULTS[name])(value)
+        self.p[name] = self._checked(name, value)
+
+    def action(self, name: str, value: Any = None) -> None:
+        """Web page button (e.g. keypad key).  Override in subclasses."""
+        raise KeyError(f"{self.TYPE}: no action named {name!r}")
 
     def set_fault(self, name: str, active: bool, value: Optional[float] = None) -> None:
         if name not in self.faults:

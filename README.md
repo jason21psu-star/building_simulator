@@ -19,7 +19,9 @@ that network, the same way MS/TP devices sit behind a router:
  └── SIM-HOST-1 192.168.1.51:47808  router, device 4010000
       └── virtual network 5001
            ├── UH-1-SIM  device 4010001  address 5001:1   BO-1 HWV_CMD …
-           └── UH-2-SIM  device 4010002  address 5001:2   BO-1 HWV_CMD …
+           ├── UH-2-SIM  device 4010002  address 5001:2   BO-1 HWV_CMD …
+           ├── SF-1-VFD  device 4010011  address 5001:11  ACH580 object list (fieldbus)
+           └── SF-2-VFD  device 4010012  address 5001:12  DI1/AI1 terminals (hardwired)
 ```
 
 - WebCTRL discovers the router and every instance with a normal Who-Is.
@@ -39,6 +41,7 @@ that network, the same way MS/TP devices sit behind a router:
 | Type | Mode | Description |
 |---|---|---|
 | `hw_unit_heater` | A (virtual I/O) | Hot water unit heater, 2-position valve, aquastat fan interlock (90 °F on / 80 °F off), 0-10 A CT on the fan motor |
+| `vfd_fan` | A or B | ABB ACH580-style VFD driving a plenum fan: keypad Hand/Off/Auto, ACH580 parameters, fault codes, hardwired (DI1/AI1/RO/AO) or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md) |
 
 ## Quick start
 
@@ -72,8 +75,10 @@ python -m hvacsim configs/station-1.yaml --address 192.168.1.51/24 --controller 
 ## Config files
 
 ```
-configs/station-1.yaml               the host: router, network numbers, instances
-configs/templates/hw_unit_heater.yaml  shared points list for unit heaters
+configs/station-1.yaml                       the host: router, network numbers, instances
+configs/templates/hw_unit_heater.yaml        unit heater points list
+configs/templates/vfd_ach580_bacnet.yaml     ACH580-style drive, BACnet fieldbus control
+configs/templates/vfd_ach580_hardwired.yaml  ACH580-style drive, hardwired control
 ```
 
 An instance references a template and fills in its placeholders:
@@ -214,15 +219,24 @@ programs on one Linux machine don't reliably share broadcasts on port 47808.
 hvacsim/
   models/base.py         EquipmentModel: inputs, signals, faults, params (no BACnet)
   models/unit_heater.py  HW unit heater physics and sequence
+  models/components/vfd.py  ACH580-style drive component (reused by the AHU fan array)
+  models/vfd_fan.py      Standalone drive + motor + fan
   config.py              Host config, templates, {placeholders}, validation
   bacnet_io.py           Router, per-instance devices, name lookup, controller writes
   runner.py              Host + instances, simulation loop, demo mode
   mockalc.py             Mock ALC controller (demo mode, tests, tools/mock_alc.py)
-  web.py, static/        Web page
+  web.py, static/        Web page; static/views/<type>.js draws each equipment type
 configs/                 Host configs and equipment templates
 tools/mock_alc.py        Fake ALC controller on a real network
 tests/                   pytest suite
 ```
 
-To add new equipment, subclass `EquipmentModel`, register it in
-`hvacsim/models/__init__.py`, and write a template.
+To add new equipment:
+1. Subclass `EquipmentModel`.
+2. Register it in `hvacsim/models/__init__.py`.
+3. Write a template.
+4. Add a view in `hvacsim/static/views/<type>.js`.
+
+Template commands can target model inputs (`input:`) or parameters
+(`param:`, for writable objects such as the drive's ACCEL1 TIME). A
+`demo.writes` block tells `--demo` what the mock controller should write.

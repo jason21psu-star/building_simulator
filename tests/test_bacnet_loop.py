@@ -192,10 +192,11 @@ def test_config_validation():
 
 def test_station_config_template_vars():
     cfg = load_host_config("configs/station-1.yaml")
-    names = [[w["object_name"] for w in i["controller"]["writes"]] for i in cfg["instances"]]
+    uh = [i for i in cfg["instances"] if i["equipment"]["type"] == "hw_unit_heater"]
+    names = [[w["object_name"] for w in i["controller"]["writes"]] for i in uh]
     assert names == [["fan_amps_1", "zone_temp_1"], ["fan_amps_2", "zone_temp_2"]]
-    assert cfg["instances"][1]["equipment"]["params"]["oat"] == 25.0
-    assert cfg["instances"][1]["equipment"]["params"]["hw_supply_temp"] == 180.0
+    assert uh[1]["equipment"]["params"]["oat"] == 25.0
+    assert uh[1]["equipment"]["params"]["hw_supply_temp"] == 180.0
 
 
 def test_controller_address_qualification():

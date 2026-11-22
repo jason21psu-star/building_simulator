@@ -42,10 +42,11 @@ class UnitSim:
             raise SystemExit(f"{self.name}: unknown equipment type {eq['type']!r}; known: {list(MODELS)}")
         self.model = model_cls(eq.get("params") or {})
         self.app = bacnet_io.build_node(inst, host.vlan_name, host.virtual_network)
-        self.commands = bacnet_io.add_command_points(self.app, self.model, inst.get("commands"))
+        self.commands, self.params = bacnet_io.add_command_points(self.app, self.model, inst.get("commands"))
         self.monitors = bacnet_io.add_monitor_points(self.app, self.model, inst.get("monitor"))
         self.link = bacnet_io.ControllerLink.from_config(
-            self.app, self.model, inst["controller"], host.directory, host.ip_network)
+            self.app, self.model, inst.get("controller") or {}, host.directory, host.ip_network)
+        self.started_at = time.monotonic()
         self.address = f"{host.virtual_network}:{inst['mac']}"
         self.events: deque = deque(maxlen=200)
         self._watch: Dict[str, Any] = {}
@@ -55,7 +56,11 @@ class UnitSim:
         log.info("%s: %s", self.name, text)
 
     def step(self, dt: float) -> None:
-        bacnet_io.read_commands(self.model, self.commands)
+        bacnet_io.read_commands(self.model, self.commands, self.params)
+        if "efb_idle_s" in self.model.inputs:
+            mode = self.model.p.get("comm_loss_mode", "any_message")
+            last = bacnet_io.last_fieldbus_activity(self.app, self.commands, self.params, mode)
+            self.model.set_input("efb_idle_s", time.monotonic() - (last or self.started_at))
         if dt > 0:
             self.model.step(dt)
         bacnet_io.update_monitors(self.model, self.monitors)
@@ -63,9 +68,9 @@ class UnitSim:
 
     def _log_changes(self) -> None:
         m = self.model
-        watched = {f"input {k}": v for k, v in m.inputs.items()}
+        watched = {f"input {d.name}": m.inputs[d.name] for d in m.INPUTS if d.kind == "binary"}
         for d in m.SIGNALS:
-            if d.kind == "binary":
+            if d.kind == "binary" or (d.kind == "text" and d.name != "warnings"):
                 watched[d.name] = m.signals[d.name]
         for k, v in watched.items():
             if k in self._watch and self._watch[k] != v:
@@ -75,7 +80,8 @@ class UnitSim:
                         if cp.input == k[6:]:
                             pr = bacnet_io.priority_summary(cp.obj)["active_priority"]
                             extra = f" ({cp.name} @ priority {pr})" if pr else f" ({cp.name} relinquished)"
-                self.event(f"{k} -> {'ON' if v else 'OFF'}{extra}")
+                shown = v if isinstance(v, str) else ("ON" if v else "OFF")
+                self.event(f"{k} -> {shown}{extra}")
             self._watch[k] = v
 
     def summary(self) -> Dict[str, Any]:
@@ -97,6 +103,13 @@ class UnitSim:
             "signals": m.signals,
             "inputs": m.inputs,
             "params": m.p,
+            "param_info": [
+                {"name": k, "id": i.id, "label": i.label, "group": i.group, "units": i.units,
+                 "choices": i.choices, "minimum": i.minimum, "maximum": i.maximum, "value": m.p[k]}
+                for k, i in m.PARAM_INFO.items()
+            ],
+            "conditions": m.CONDITIONS,
+            "actions": m.ACTIONS,
             "faults": [
                 {"name": f.name, "label": f.label, "group": f.group, "kind": f.kind,
                  "units": f.units, "description": f.description,
@@ -107,6 +120,11 @@ class UnitSim:
                 {"name": c.name, "object": bacnet_io.objid_text(c.objid), "input": c.input,
                  **bacnet_io.priority_summary(c.obj)}
                 for c in self.commands
+            ],
+            "param_objects": [
+                {"name": pp.name, "object": bacnet_io.objid_text(pp.objid), "param": pp.param,
+                 "value": m.p[pp.param]}
+                for pp in self.params
             ],
             "monitor": [
                 {"name": p.name, "object": bacnet_io.objid_text(p.objid), "signal": p.signal,
@@ -152,7 +170,7 @@ class Host:
 
         mocks: Dict[int, MockController] = {}
         for unit in self.units:
-            dev = unit.link.device_instance
+            dev = unit.link.device_instance or 240000 + int(unit.cfg["mac"])
             if dev not in mocks:
                 port = bacnet_io.virtual_port(1, DEMO_LAN, self.ip_network, 0x10 + len(mocks))
                 mocks[dev] = MockController(dev, port, name=f"ALC-DEMO-{dev}")
@@ -165,6 +183,9 @@ class Host:
                 mock.add_point(name, objid, units)
                 if pt.signal == "space_temp":
                     zone_name = name
+            for w in (unit.cfg.get("demo") or {}).get("writes", []) or []:
+                mock.add_network_output(int(unit.cfg["device_instance"]), w["object"], w["value"],
+                                        int(w.get("priority", 10)), label=unit.name)
             valve = next((c for c in unit.commands if c.input == "valve_cmd"), None)
             if zone_name and valve:
                 mock.add_thermostat(Thermostat(

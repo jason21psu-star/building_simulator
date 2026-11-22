@@ -32,12 +32,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from bacpypes3.apdu import AbortPDU, ErrorPDU, ErrorRejectAbortNack, RejectPDU
+from bacpypes3.apdu import AbortPDU, ConfirmedRequestPDU, ErrorPDU, ErrorRejectAbortNack, RejectPDU
 from bacpypes3.app import Application
 from bacpypes3.basetypes import BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier
 from bacpypes3.errors import PropertyError
-from bacpypes3.local.analog import AnalogOutputObject, AnalogValueObject, AnalogValueObjectCmd
-from bacpypes3.local.binary import BinaryOutputObject, BinaryValueObject, BinaryValueObjectCmd
+from bacpypes3.local.analog import AnalogInputObject, AnalogOutputObject, AnalogValueObject, AnalogValueObjectCmd
+from bacpypes3.local.binary import BinaryInputObject, BinaryOutputObject, BinaryValueObject, BinaryValueObjectCmd
 from bacpypes3.local.networkport import NetworkPortObject
 from bacpypes3.pdu import Address
 from bacpypes3.primitivedata import ObjectIdentifier, Real
@@ -73,11 +73,67 @@ class ReadOnlyBinaryValue(_ReadOnlyPV, BinaryValueObject):
     pass
 
 
+class ReadOnlyAnalogInput(_ReadOnlyPV, AnalogInputObject):
+    pass
+
+
+class ReadOnlyBinaryInput(_ReadOnlyPV, BinaryInputObject):
+    pass
+
+
+class ReadOnlyAnalogOutput(_ReadOnlyPV, AnalogOutputObject):
+    pass
+
+
+class ReadOnlyBinaryOutput(_ReadOnlyPV, BinaryOutputObject):
+    pass
+
+
+class _Stamped:
+    """Mix-in: remember when Present_Value was last written over the network (comm-loss supervision)."""
+
+    _last_write: float = 0.0
+
+    async def write_property(self, attr, value, index=None, priority=None):  # type: ignore[override]
+        await super().write_property(attr, value, index, priority)
+        if attr in ("presentValue", PropertyIdentifier.presentValue):
+            self._last_write = time.monotonic()
+
+
+class CmdBinaryOutput(_Stamped, BinaryOutputObject):
+    pass
+
+
+class CmdBinaryValue(_Stamped, BinaryValueObjectCmd):
+    pass
+
+
+class CmdAnalogOutput(_Stamped, AnalogOutputObject):
+    pass
+
+
+class CmdAnalogValue(_Stamped, AnalogValueObjectCmd):
+    pass
+
+
+class ParamAnalogValue(_Stamped, AnalogValueObject):
+    """Writable, non-commandable AV mapped to a model parameter (e.g. ACCEL1 TIME)."""
+
+
 COMMAND_CLASSES = {
-    "binary-output": BinaryOutputObject,
-    "binary-value": BinaryValueObjectCmd,
-    "analog-output": AnalogOutputObject,
-    "analog-value": AnalogValueObjectCmd,
+    "binary-output": CmdBinaryOutput,
+    "binary-value": CmdBinaryValue,
+    "analog-output": CmdAnalogOutput,
+    "analog-value": CmdAnalogValue,
+}
+
+MONITOR_CLASSES = {
+    "analog-value": ReadOnlyAnalogValue,
+    "binary-value": ReadOnlyBinaryValue,
+    "analog-input": ReadOnlyAnalogInput,
+    "binary-input": ReadOnlyBinaryInput,
+    "analog-output": ReadOnlyAnalogOutput,
+    "binary-output": ReadOnlyBinaryOutput,
 }
 
 SHORT_TYPES = {
@@ -103,6 +159,13 @@ def objid_text(objid: Optional[ObjectIdentifier]) -> Optional[str]:
     if objid is None:
         return None
     return f"{objid[0]},{objid[1]}"
+
+
+def _text(value: Any) -> str:
+    """YAML turns YES/NO/ON/OFF into booleans; BACnet text properties need strings."""
+    if isinstance(value, bool):
+        return {True: "YES", False: "NO"}[value]
+    return str(value)
 
 
 def _is_binary(objid: ObjectIdentifier) -> bool:
@@ -203,12 +266,23 @@ def build_router(host: Dict[str, Any], vlan_name: str, upstream_virtual: Optiona
     return Application.from_object_list([dev, up, down])
 
 
+class NodeApplication(Application):
+    """An equipment instance's BACnet device; remembers when it last received a confirmed request."""
+
+    last_request: float = 0.0
+
+    async def indication(self, apdu) -> None:  # type: ignore[override]
+        if isinstance(apdu, ConfirmedRequestPDU):
+            self.last_request = time.monotonic()
+        await super().indication(apdu)
+
+
 def build_node(inst: Dict[str, Any], vlan_name: str, network: int) -> Application:
     dev = _device(inst["device_instance"], inst["name"],
                   modelName=inst.get("model_name", "HVAC Training Simulator"),
                   description=inst.get("description"), location=inst.get("location"))
     port = virtual_port(1, vlan_name, network, inst["mac"])
-    return Application.from_object_list([dev, port])
+    return NodeApplication.from_object_list([dev, port])
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +299,15 @@ class CommandPoint:
 
 
 @dataclass
+class ParamPoint:
+    name: str
+    objid: ObjectIdentifier
+    param: str
+    obj: Any
+    synced: Any = None
+
+
+@dataclass
 class MonitorPoint:
     name: str
     objid: ObjectIdentifier
@@ -232,10 +315,27 @@ class MonitorPoint:
     obj: Any
 
 
-def add_command_points(app: Application, model: EquipmentModel, cfg: List[Dict[str, Any]]) -> List[CommandPoint]:
-    points = []
+def add_command_points(app: Application, model: EquipmentModel, cfg: List[Dict[str, Any]]) -> Tuple[List[CommandPoint], List[ParamPoint]]:
+    """Objects the controller writes: commandable objects -> model inputs, writable AVs -> model parameters."""
+    points: List[CommandPoint] = []
+    params: List[ParamPoint] = []
     for c in cfg or []:
         objid = parse_objid(c["object"])
+        if "param" in c:
+            if str(objid[0]) != "analog-value":
+                raise ValueError(f"{c['name']}: parameter objects must be analog-value")
+            name = c["param"]
+            if name not in model.p:
+                raise KeyError(f"{c['name']}: model has no parameter {name!r}")
+            info = model.PARAM_INFO.get(name)
+            obj = ParamAnalogValue(objectIdentifier=objid, objectName=_text(c["name"]),
+                                   description=c.get("description", info.label if info else name),
+                                   presentValue=Real(float(model.p[name])),
+                                   units=EngineeringUnits(c.get("units", "noUnits")),
+                                   outOfService=False, statusFlags=[0, 0, 0, 0])
+            app.add_object(obj)
+            params.append(ParamPoint(c["name"], objid, name, obj, float(model.p[name])))
+            continue
         cls = COMMAND_CLASSES.get(str(objid[0]))
         if cls is None:
             raise ValueError(f"command object type {objid[0]} not supported (use {list(COMMAND_CLASSES)})")
@@ -243,23 +343,24 @@ def add_command_points(app: Application, model: EquipmentModel, cfg: List[Dict[s
         relinquish = c.get("relinquish_default", sdef.default)
         kwargs = dict(
             objectIdentifier=objid,
-            objectName=c["name"],
-            description=c.get("description", sdef.description),
+            objectName=_text(c["name"]),
+            description=_text(c.get("description", sdef.description)),
             presentValue=_to_bacnet(objid, relinquish),
             relinquishDefault=_to_bacnet(objid, relinquish),
             outOfService=False,
             statusFlags=[0, 0, 0, 0],
         )
         if _is_binary(objid):
-            kwargs.update(activeText=c.get("active_text", "On"), inactiveText=c.get("inactive_text", "Off"))
+            kwargs.update(activeText=_text(c.get("active_text", "On")), inactiveText=_text(c.get("inactive_text", "Off")))
             if str(objid[0]) == "binary-output":
                 kwargs["polarity"] = "normal"
         else:
             kwargs["units"] = EngineeringUnits(c.get("units", sdef.units))
         obj = cls(**kwargs)
+        obj._watchdog = bool(c.get("comm_watchdog", False))
         app.add_object(obj)
         points.append(CommandPoint(c["name"], objid, c["input"], obj))
-    return points
+    return points, params
 
 
 def add_monitor_points(app: Application, model: EquipmentModel, cfg: List[Dict[str, Any]]) -> List[MonitorPoint]:
@@ -270,27 +371,58 @@ def add_monitor_points(app: Application, model: EquipmentModel, cfg: List[Dict[s
         kind = str(objid[0])
         common = dict(
             objectIdentifier=objid,
-            objectName=c["name"],
-            description=c.get("description", sdef.description),
+            objectName=_text(c["name"]),
+            description=_text(c.get("description", sdef.description)),
             outOfService=False,
             statusFlags=[0, 0, 0, 0],
         )
-        if kind == "analog-value":
-            obj = ReadOnlyAnalogValue(presentValue=Real(0.0), units=EngineeringUnits(c.get("units", sdef.units)), **common)
-        elif kind == "binary-value":
-            obj = ReadOnlyBinaryValue(presentValue=BinaryPV.inactive,
-                                      activeText=c.get("active_text", "On"),
-                                      inactiveText=c.get("inactive_text", "Off"), **common)
+        cls = MONITOR_CLASSES.get(kind)
+        if cls is None:
+            raise ValueError(f"monitor object type {kind} not supported (use {list(MONITOR_CLASSES)})")
+        if sdef.kind == "text":
+            raise ValueError(f"{c['name']}: signal {c['signal']} is text and cannot be a BACnet object")
+        if kind.startswith("analog"):
+            units = c.get("units", sdef.units if sdef.kind == "analog" else "noUnits")
+            extra = dict(presentValue=Real(0.0), units=EngineeringUnits(units))
+            if kind == "analog-output":
+                extra["relinquishDefault"] = Real(0.0)
         else:
-            raise ValueError(f"monitor objects must be analog-value or binary-value, got {kind}")
+            extra = dict(presentValue=BinaryPV.inactive, activeText=_text(c.get("active_text", "On")),
+                         inactiveText=_text(c.get("inactive_text", "Off")))
+            if kind in ("binary-input", "binary-output"):
+                extra["polarity"] = "normal"
+            if kind == "binary-output":
+                extra["relinquishDefault"] = BinaryPV.inactive
+        obj = cls(**extra, **common)
         app.add_object(obj)
         points.append(MonitorPoint(c["name"], objid, c["signal"], obj))
     return points
 
 
-def read_commands(model: EquipmentModel, points: List[CommandPoint]) -> None:
+def read_commands(model: EquipmentModel, points: List[CommandPoint], params: Optional[List[ParamPoint]] = None) -> None:
     for pt in points:
         model.set_input(pt.input, _from_bacnet(pt.obj.presentValue))
+    for pp in params or []:
+        value = float(pp.obj.presentValue)
+        if value != pp.synced:
+            # written over BACnet: apply to the model (rejects out-of-range values)
+            try:
+                model.set_param(pp.param, value)
+            except (ValueError, TypeError) as err:
+                log.warning("%s: rejected %s = %s (%s)", pp.name, pp.param, value, err)
+        current = float(model.p[pp.param])
+        if float(pp.obj.presentValue) != current:
+            pp.obj.presentValue = Real(current)
+        pp.synced = float(pp.obj.presentValue)
+
+
+def last_fieldbus_activity(app: Application, points: List[CommandPoint], params: List[ParamPoint],
+                           mode: str = "any_message") -> float:
+    """Monotonic time the device last heard from the fieldbus (0 = never)."""
+    if mode == "any_message":
+        return getattr(app, "last_request", 0.0)
+    stamps = [getattr(p.obj, "_last_write", 0.0) for p in points if getattr(p.obj, "_watchdog", False)]
+    return max(stamps) if stamps else 0.0
 
 
 def update_monitors(model: EquipmentModel, points: List[MonitorPoint]) -> None:
@@ -486,7 +618,7 @@ class ControllerLink:
             points.append(pt)
         return cls(
             app=app, model=model, directory=directory,
-            device_instance=int(cfg["device_instance"]),
+            device_instance=int(cfg.get("device_instance") or 0),
             ip_network=int(ip_network),
             address=controller_address(cfg.get("address"), ip_network),
             min_interval=float(cfg.get("min_interval", 1.0)),
@@ -572,6 +704,9 @@ class ControllerLink:
             await asyncio.sleep(0.25)
 
     async def _tick(self) -> None:
+        if not self.points:
+            self.status = "no controller writes configured"
+            return
         if not self.enabled:
             self.status = "controller writes disabled"
             return

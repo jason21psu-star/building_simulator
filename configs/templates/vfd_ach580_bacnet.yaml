@@ -1,0 +1,78 @@
+# ===========================================================================
+#  Template: ACH580-style VFD controlled over BACnet (embedded fieldbus)
+# ===========================================================================
+#  The drive is its own BACnet device on the simulator's virtual network,
+#  like an ACH580 on an MS/TP trunk behind a router.  The ALC controller
+#  writes RUN/STOP CMD and INPUT REF 1 and reads the actual values.
+#
+#  Object list modelled on ABB's embedded-fieldbus BACnet object list.
+#  VERIFY object numbers/names against the manual for your drive firmware;
+#  everything below is editable without code changes.
+# ===========================================================================
+
+model_name: ACH580 (simulated)
+description: ACH580-style VFD, fieldbus control
+
+equipment:
+  type: vfd_fan
+  params:
+    ext1_commands: fieldbus           # 20.01 Ext1 commands = Embedded fieldbus
+    ext1_freq_ref1: efb_ref1          # 28.11 Ext1 frequency ref1 = EFB ref1
+    comm_loss_action: fault           # 58.14 -> fault 6681 when the fieldbus goes quiet
+    comm_loss_mode: any_message       # 58.15 any request to the drive (reads count)
+    comm_loss_time: 30.0              # 58.16 s
+    min_freq: 12.0                    # 30.13 Hz
+    max_freq: 60.0                    # 30.14 Hz
+    accel_time_1: 30.0                # 28.72 s
+    decel_time_1: 30.0                # 28.73 s
+
+# --- Commandable / writable objects (ALC writes these) ----------------------
+commands:
+  - { object: "binary-value,10", name: "RUN/STOP CMD", input: efb_run, active_text: RUN, inactive_text: STOP, comm_watchdog: true }
+  - { object: "binary-value,12", name: "RUN ENA CMD", input: efb_run_enable, active_text: ENABLE, inactive_text: DISABLE, relinquish_default: true }
+  - { object: "binary-value,14", name: "FAULT RESET", input: efb_fault_reset, active_text: RESET, inactive_text: NORMAL }
+  - { object: "analog-value,16", name: "INPUT REF 1", input: efb_ref1_pct, units: percent, comm_watchdog: true }
+  - { object: "analog-value,23", name: "ACCEL1 TIME", param: accel_time_1, units: seconds }
+  - { object: "analog-value,24", name: "DECEL1 TIME", param: decel_time_1, units: seconds }
+
+# --- Actual values / status (read-only) -------------------------------------
+monitor:
+  - { object: "analog-value,0",  name: "OUTPUT SPEED",   signal: motor_rpm }
+  - { object: "analog-value,1",  name: "OUTPUT FREQ",    signal: output_freq }
+  - { object: "analog-value,2",  name: "DC BUS VOLT",    signal: dc_bus_v }
+  - { object: "analog-value,3",  name: "OUTPUT VOLTAGE", signal: output_voltage }
+  - { object: "analog-value,4",  name: "CURRENT",        signal: motor_current }
+  - { object: "analog-value,5",  name: "TORQUE",         signal: torque_pct }
+  - { object: "analog-value,6",  name: "POWER",          signal: power_kw }
+  - { object: "analog-value,7",  name: "DRIVE TEMP",     signal: drive_temp }
+  - { object: "analog-value,8",  name: "KWH (R)",        signal: kwh }
+  - { object: "analog-value,14", name: "RUN TIME (R)",   signal: run_hours }
+  - { object: "analog-value,15", name: "MOTOR TEMP",     signal: motor_temp }
+  - { object: "analog-value,18", name: "LAST FLT",       signal: last_fault }
+  - { object: "analog-value,19", name: "PREV FLT 1",     signal: prev_fault_1 }
+  - { object: "analog-value,20", name: "PREV FLT 2",     signal: prev_fault_2 }
+  - { object: "binary-value,0",  name: "RUN/STOP ACT",   signal: running, active_text: RUN, inactive_text: STOP }
+  - { object: "binary-value,1",  name: "FWD/REV ACT",    signal: forward, active_text: FWD, inactive_text: "-" }
+  - { object: "binary-value,2",  name: "FAULT ACT",      signal: fault_active, active_text: FAULT, inactive_text: OK }
+  - { object: "binary-value,4",  name: "HAND/AUTO ACT",  signal: in_auto, active_text: AUTO, inactive_text: HAND/OFF }
+  - { object: "binary-value,5",  name: "ALARM ACT",      signal: warning_active, active_text: ALARM, inactive_text: OK }
+  - { object: "binary-value,7",  name: "DRIVE READY",    signal: ready, active_text: READY, inactive_text: NOT READY }
+  - { object: "binary-value,8",  name: "AT SETPOINT",    signal: at_setpoint, active_text: YES, inactive_text: NO }
+  - { object: "binary-value,9",  name: "RUN ENA ACT",    signal: run_enable_act, active_text: ENABLED, inactive_text: DISABLED }
+  - { object: "binary-input,0",  name: "DI 1 ACT",       signal: di1_status }
+  - { object: "binary-input,1",  name: "DI 2 ACT",       signal: di2_status }
+  - { object: "binary-input,2",  name: "DI 3 ACT",       signal: di3_status }
+  - { object: "binary-input,3",  name: "DI 4 ACT",       signal: di4_status }
+  - { object: "binary-input,4",  name: "DI 5 ACT",       signal: di5_status }
+  - { object: "binary-input,5",  name: "DI 6 ACT",       signal: di6_status }
+  - { object: "binary-output,0", name: "RO 1 ACT",       signal: ro1 }
+  - { object: "binary-output,1", name: "RO 2 ACT",       signal: ro2 }
+  - { object: "binary-output,2", name: "RO 3 ACT",       signal: ro3 }
+  - { object: "analog-input,0",  name: "AI 1 ACT",       signal: ai1_v }
+  - { object: "analog-output,0", name: "AO 1 ACT",       signal: ao1_pct }
+
+# --- Demo mode only: what the demo controller writes ------------------------
+demo:
+  writes:
+    - { object: "binary-value,10", value: true }
+    - { object: "analog-value,16", value: 75 }

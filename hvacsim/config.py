@@ -130,8 +130,8 @@ def validate(cfg: Dict[str, Any]) -> None:
         if "equipment" not in inst or "type" not in inst["equipment"]:
             raise ConfigError(f"{name}: equipment.type is required (usually from the template)")
         ctl = inst.get("controller") or {}
-        if "device_instance" not in ctl:
-            raise ConfigError(f"{name}: controller.device_instance is required")
+        if ctl.get("writes") and "device_instance" not in ctl:
+            raise ConfigError(f"{name}: controller.device_instance is required when controller.writes are configured")
         for w in ctl.get("writes", []) or []:
             if not (w.get("object_name") or w.get("object")):
                 raise ConfigError(f"{name}: controller write for {w.get('signal')} needs object_name or object")

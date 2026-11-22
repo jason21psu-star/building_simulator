@@ -44,3 +44,17 @@ instances:
     equipment:
       params:
         oat: 25.0                     # per-instance overrides merge into the template
+
+  # --- VFDs (ACH580-style) --------------------------------------------------
+  - name: SF-1-VFD                    # fieldbus: ALC reads/writes the drive's objects
+    template: templates/vfd_ach580_bacnet.yaml
+    device_instance: 4010011
+    mac: 11
+
+  - name: SF-2-VFD                    # hardwired: DI1 / AI1 terminals, RO2 / RO3 / AO1 to ALC
+    template: templates/vfd_ach580_hardwired.yaml
+    device_instance: 4010012
+    mac: 12
+    vars: { n: 2 }                    # sf2_status, sf2_fault, sf2_speed_fb
+    controller:
+      device_instance: 240110
