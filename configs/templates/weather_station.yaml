@@ -1,0 +1,28 @@
+# ===========================================================================
+#  Template: weather station (shared outdoor conditions)
+# ===========================================================================
+#  Its own BACnet device; the ALC system reads these objects (no writes into
+#  the controller).  The true outdoor conditions also feed every other
+#  simulator on the host (unit heater OAT now, AHU mixing/coils later).
+#
+#  Remove the derived objects (dew point / enthalpy / wet bulb) if trainees
+#  should calculate them in the ALC program from temperature and RH.
+# ===========================================================================
+
+model_name: Weather Station (simulated)
+description: Outdoor air temperature and humidity
+
+equipment:
+  type: weather_station
+  params:
+    oat: 50.0                         # °F  (fixed weather; adjust live on the web page)
+    oa_rh: 50.0                       # %RH
+    elevation_ft: 0.0
+    ramp_rate: 0.0                    # 0 = changes take effect immediately
+
+monitor:
+  - { object: "analog-input,1", name: "OA TEMP",     signal: oa_temp }
+  - { object: "analog-input,2", name: "OA RH",       signal: oa_rh }
+  - { object: "analog-value,1", name: "OA DEWPOINT", signal: oa_dewpoint }
+  - { object: "analog-value,2", name: "OA ENTHALPY", signal: oa_enthalpy }
+  - { object: "analog-value,3", name: "OA WETBULB",  signal: oa_wetbulb }

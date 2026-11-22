@@ -47,6 +47,8 @@ class UnitSim:
         self.link = bacnet_io.ControllerLink.from_config(
             self.app, self.model, inst.get("controller") or {}, host.directory, host.ip_network)
         self.started_at = time.monotonic()
+        self.weather: Optional["UnitSim"] = None          # host weather station feeding this unit
+        self.weather_params: Dict[str, str] = {}
         self.address = f"{host.virtual_network}:{inst['mac']}"
         self.events: deque = deque(maxlen=200)
         self._watch: Dict[str, Any] = {}
@@ -56,6 +58,11 @@ class UnitSim:
         log.info("%s: %s", self.name, text)
 
     def step(self, dt: float) -> None:
+        if self.weather is not None:
+            for param, signal in self.weather_params.items():
+                self.model.p[param] = self.weather.model.signals[signal]
+        if "device_offline" in self.model.faults:
+            self.app.offline = self.model.faults["device_offline"].active
         bacnet_io.read_commands(self.model, self.commands, self.params)
         if "efb_idle_s" in self.model.inputs:
             mode = self.model.p.get("comm_loss_mode", "any_message")
@@ -94,6 +101,7 @@ class UnitSim:
             "controller": link["device_instance"],
             "writes_ok": all(p["ok"] for p in link["points"]) if link["points"] else None,
             "active_faults": sum(1 for f in self.model.faults.values() if f.active),
+            "uses_weather": self.weather is not None,
         }
 
     def state(self) -> Dict[str, Any]:
@@ -109,6 +117,8 @@ class UnitSim:
                 for k, i in m.PARAM_INFO.items()
             ],
             "conditions": m.CONDITIONS,
+            "weather_driven": list(self.weather_params),
+            "weather_source": self.weather.name if self.weather else None,
             "actions": m.ACTIONS,
             "faults": [
                 {"name": f.name, "label": f.label, "group": f.group, "kind": f.kind,
@@ -155,6 +165,7 @@ class Host:
             bacnet_io.make_virtual_network(DEMO_LAN)
         self.router = bacnet_io.build_router(h, self.vlan_name, DEMO_LAN if demo else None)
         self.units: List[UnitSim] = [UnitSim(inst, self) for inst in cfg["instances"]]
+        self.weather = self._link_weather(h.get("weather"))
         self.mocks = self._build_demo_controllers() if (demo and demo_controllers) else []
 
     def unit(self, name: Optional[str]) -> UnitSim:
@@ -165,11 +176,32 @@ class Host:
                 return u
         raise KeyError(f"no unit named {name!r}")
 
+    def _link_weather(self, name: Optional[str]) -> Optional[UnitSim]:
+        """Share one weather station's true outdoor conditions with every unit that uses them."""
+        stations = [u for u in self.units if u.model.TYPE == "weather_station"]
+        if name:
+            stations = [u for u in stations if u.name == name]
+            if not stations:
+                raise SystemExit(f"host.weather: no weather_station instance named {name!r}")
+        if not stations:
+            return None
+        wx = stations[0]
+        for u in self.units:
+            if u is not wx and u.model.WEATHER_PARAMS and u.cfg.get("use_weather", True):
+                u.weather = wx
+                u.weather_params = dict(u.model.WEATHER_PARAMS)
+        # the station steps first so everyone sees this step's weather
+        self.units.remove(wx)
+        self.units.insert(0, wx)
+        return wx
+
     def _build_demo_controllers(self):
         from .mockalc import MockController, Thermostat
 
         mocks: Dict[int, MockController] = {}
         for unit in self.units:
+            if not unit.link.points and not (unit.cfg.get("demo") or {}).get("writes"):
+                continue   # nothing for a demo controller to do (e.g. the weather station)
             dev = unit.link.device_instance or 240000 + int(unit.cfg["mac"])
             if dev not in mocks:
                 port = bacnet_io.virtual_port(1, DEMO_LAN, self.ip_network, 0x10 + len(mocks))
@@ -239,6 +271,7 @@ class Host:
             "speed": self.speed,
             "paused": self.paused,
             "demo": self.demo,
+            "weather": self.weather.name if self.weather else None,
             "units": [u.summary() for u in self.units],
             "demo_controllers": [m.snapshot() for m in self.mocks],
         }

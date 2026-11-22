@@ -18,6 +18,7 @@ that network, the same way MS/TP devices sit behind a router:
  │                                  fan_amps_2 (AI, OOS)  zone_temp_2
  └── SIM-HOST-1 192.168.1.51:47808  router, device 4010000
       └── virtual network 5001
+           ├── WX-1      device 4010090  address 5001:90  OA TEMP (AI-1), OA RH (AI-2), …
            ├── UH-1-SIM  device 4010001  address 5001:1   BO-1 HWV_CMD …
            ├── UH-2-SIM  device 4010002  address 5001:2   BO-1 HWV_CMD …
            ├── SF-1-VFD  device 4010011  address 5001:11  ACH580 object list (fieldbus)
@@ -41,6 +42,7 @@ that network, the same way MS/TP devices sit behind a router:
 | Type | Mode | Description |
 |---|---|---|
 | `hw_unit_heater` | A (virtual I/O) | Hot water unit heater, 2-position valve, aquastat fan interlock (90 °F on / 80 °F off), 0-10 A CT on the fan motor |
+| `weather_station` | B (ALC reads it) | Shared outdoor air temp/RH for the ALC system and every simulator on the host. Derived dew point, enthalpy and wet bulb, sensor faults, "device offline" |
 | `vfd_fan` | A or B | ABB ACH580-style VFD driving a plenum fan: keypad Hand/Off/Auto, ACH580 parameters, fault codes, hardwired (DI1/AI1/RO/AO) or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md) |
 
 ## Quick start
@@ -76,6 +78,7 @@ python -m hvacsim configs/station-1.yaml --address 192.168.1.51/24 --controller 
 
 ```
 configs/station-1.yaml                       the host: router, network numbers, instances
+configs/templates/weather_station.yaml       weather station objects
 configs/templates/hw_unit_heater.yaml        unit heater points list
 configs/templates/vfd_ach580_bacnet.yaml     ACH580-style drive, BACnet fieldbus control
 configs/templates/vfd_ach580_hardwired.yaml  ACH580-style drive, hardwired control
@@ -97,6 +100,23 @@ instances:
 Anything an instance sets is merged over the template, such as `equipment.params`
 and `controller`. A `commands` or `monitor` list on an instance replaces the
 template's list.
+
+## Weather station
+
+`WX-1` is the host's outdoor conditions, set with `host.weather` in the host config.
+- **The ALC system** reads its objects: `OA TEMP`, `OA RH`, and the optional
+  `OA DEWPOINT`, `OA ENTHALPY` and `OA WETBULB`.
+- **Every other simulator** takes the *true* conditions from it. For example,
+  the unit heaters' `oat` follows WX-1 and is no longer set per unit.
+  An instance can opt out with `use_weather: false`.
+- **Sensor faults** change only what the station reports, not the physics.
+  For example, a damaged radiation shield makes the temperature read high
+  and the RH read low, so a controller calculating enthalpy gets it wrong.
+- **Weather is fixed by default.** Set OA temp and RH on the WX-1 tab, with
+  an optional change rate.
+
+Psychrometric calculations (ASHRAE, I-P) are in `hvacsim/psychro.py`. The AHU
+will reuse them.
 
 ## Unit heater sequence (what the simulator does physically)
 
@@ -221,6 +241,8 @@ hvacsim/
   models/unit_heater.py  HW unit heater physics and sequence
   models/components/vfd.py  ACH580-style drive component (reused by the AHU fan array)
   models/vfd_fan.py      Standalone drive + motor + fan
+  models/weather_station.py  Weather station
+  psychro.py             Moist-air psychrometrics (I-P)
   config.py              Host config, templates, {placeholders}, validation
   bacnet_io.py           Router, per-instance devices, name lookup, controller writes
   runner.py              Host + instances, simulation loop, demo mode

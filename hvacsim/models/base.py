@@ -85,6 +85,7 @@ class EquipmentModel:
     PARAM_INFO: Dict[str, ParamInfo] = {}      # parameters shown/editable on the web page
     CONDITIONS: List[str] = []                 # parameters shown in the "Conditions" panel
     ACTIONS: List[str] = []                    # web page buttons, e.g. keypad Hand/Off/Auto
+    WEATHER_PARAMS: Dict[str, str] = {}        # parameter -> weather station signal it follows
 
     # largest internal integration step (simulated seconds)
     MAX_SUBSTEP = 0.5

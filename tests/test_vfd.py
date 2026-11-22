@@ -238,6 +238,7 @@ def test_bacnet_fieldbus_and_hardwired():
 async def _bacnet():
     cfg = load_host_config("configs/station-1.yaml")
     cfg["instances"] = [i for i in cfg["instances"] if i["name"].startswith("SF-")]
+    cfg["host"].pop("weather", None)
     cfg["host"]["speed"] = 20.0
     cfg["instances"][0]["equipment"]["params"]["comm_loss_time"] = 2.0   # SF-1 fieldbus
     host = Host(cfg, demo=True, demo_controllers=False)

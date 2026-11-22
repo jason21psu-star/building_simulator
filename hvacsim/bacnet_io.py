@@ -270,8 +270,11 @@ class NodeApplication(Application):
     """An equipment instance's BACnet device; remembers when it last received a confirmed request."""
 
     last_request: float = 0.0
+    offline: bool = False          # simulated "device offline": ignore every request
 
     async def indication(self, apdu) -> None:  # type: ignore[override]
+        if self.offline:
+            return
         if isinstance(apdu, ConfirmedRequestPDU):
             self.last_request = time.monotonic()
         await super().indication(apdu)

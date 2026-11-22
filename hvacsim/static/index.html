@@ -99,7 +99,7 @@
   </div>
 
   <div class="stack">
-    <section class="panel">
+    <section class="panel" id="ctl_panel">
       <h2>Controller link (simulator writes to ALC)</h2>
       <div class="row" style="margin-bottom:8px">
         <label>Device ID <input type="number" id="ctl_id" min="0" max="4194302"></label>
@@ -280,6 +280,7 @@ async function refresh() {
 
   // controller link
   const c = s.controller;
+  $('ctl_panel').hidden = !c.points.length;
   if (!ctlLoaded) { $('ctl_id').value = c.device_instance; $('ctl_addr').value = c.address || ''; ctlLoaded = true; }
   $('ctl_status').textContent = c.status;
   $('writes').innerHTML = c.points.map(p => `<tr><td>${p.name}</td>
@@ -305,7 +306,9 @@ async function refresh() {
     const row = $('fr_' + f.name); if (row) row.classList.toggle('active', f.active);
   }
   if (!paramsLoaded) {
-    $('cond').innerHTML = s.conditions.map(name => {
+    const driven = s.weather_driven || [];
+    $('cond').innerHTML = (driven.length ? `<span class="muted">${driven.join(', ')} from ${s.weather_source}</span>` : '') +
+      s.conditions.filter(name => !driven.includes(name)).map(name => {
       const i = s.param_info.find(p => p.name === name) || {label: name, units: ''};
       return `<label>${i.label} ${i.units ? '(' + i.units + ')' : ''} <input type="number" step="any" data-param="${name}" value="${s.params[name]}"></label>`;
     }).join('');

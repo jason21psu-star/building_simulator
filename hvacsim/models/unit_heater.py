@@ -91,6 +91,7 @@ class HotWaterUnitHeater(EquipmentModel):
     }
 
     CONDITIONS = ["oat", "hw_supply_temp"]
+    WEATHER_PARAMS = {"oat": "oa_temp_actual"}   # follows the host weather station when there is one
     PARAM_INFO = {
         "oat": ParamInfo("", "OA temp", units="°F", minimum=-40, maximum=120),
         "hw_supply_temp": ParamInfo("", "HW supply", units="°F", minimum=40, maximum=250),

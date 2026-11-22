@@ -195,8 +195,8 @@ def test_station_config_template_vars():
     uh = [i for i in cfg["instances"] if i["equipment"]["type"] == "hw_unit_heater"]
     names = [[w["object_name"] for w in i["controller"]["writes"]] for i in uh]
     assert names == [["fan_amps_1", "zone_temp_1"], ["fan_amps_2", "zone_temp_2"]]
-    assert uh[1]["equipment"]["params"]["oat"] == 25.0
-    assert uh[1]["equipment"]["params"]["hw_supply_temp"] == 180.0
+    assert uh[1]["equipment"]["params"]["hw_supply_temp"] == 170.0   # instance override
+    assert uh[0]["equipment"]["params"]["hw_supply_temp"] == 180.0   # template value
 
 
 def test_controller_address_qualification():
