@@ -1,0 +1,55 @@
+# ===========================================================================
+#  Template: single-duct VAV, hot water reheat, no fan (ALC vav_rh)
+# ===========================================================================
+#  One VAV controller per box.  The point names are the SAME in every
+#  controller (the _1 suffix doesn't change from box to box).
+#
+#  Simulator objects the VAV controller writes:
+#    AO-1 dmpr_1    damper position, 0-100 % (integrated actuator, 154 s stroke)
+#    AO-2 rh_vlv_1  reheat valve, % of 10 V (2-10 V, fails closed)
+#  Values written into the VAV controller (by object name):
+#    zone_temp_1, zone_humid_1, da_temp_1, airflow_1 (cfm),
+#    stpt_adj_1 (± °F offset), override_1 (momentary button)
+#
+#  Boxes normally come from a CSV schedule (configs/vav_schedule.csv); each
+#  row sets the controller device, box size and zone.
+# ===========================================================================
+
+model_name: VAV Reheat Box (simulated)
+description: Single-duct VAV with HW reheat
+
+equipment:
+  type: vav_rh
+  params:
+    stroke_s: 154.0
+    stpt_adj_range: 3.0               # ± °F (1-5)
+
+commands:
+  - { object: "analog-output,1", name: dmpr_1,   input: dmpr_1,   units: percent, description: "Damper position command, %" }
+  - { object: "analog-output,2", name: rh_vlv_1, input: rh_vlv_1, units: percent, description: "Reheat valve, % of 10 V (2-10 V)" }
+
+controller:
+  min_interval: 1.0
+  writes:
+    - { signal: zone_temp_1,  object_name: zone_temp_1,  demo_object: "analog-input,1", deadband: 0.1,  heartbeat: 30 }
+    - { signal: da_temp_1,    object_name: da_temp_1,    demo_object: "analog-input,2", deadband: 0.2,  heartbeat: 30 }
+    - { signal: airflow_1,    object_name: airflow_1,    demo_object: "analog-input,3", deadband: 5,    heartbeat: 30 }
+    - { signal: stpt_adj_1,   object_name: stpt_adj_1,   demo_object: "analog-input,4", deadband: 0.1,  heartbeat: 30 }
+    - { signal: zone_humid_1, object_name: zone_humid_1, demo_object: "analog-value,1", deadband: 0.5,  heartbeat: 30 }
+    - { signal: override_1,   object_name: override_1,   demo_object: "binary-input,1", heartbeat: 30 }
+
+monitor:
+  - { object: "analog-value,101", name: "TRUE AIRFLOW",      signal: airflow_actual }
+  - { object: "analog-value,102", name: "DAMPER POSITION",   signal: damper_pos }
+  - { object: "analog-value,103", name: "REHEAT VALVE POS",  signal: valve_pos }
+  - { object: "analog-value,104", name: "INLET STATIC",      signal: inlet_static }
+  - { object: "analog-value,105", name: "SUPPLY AIR IN",     signal: supply_temp_in }
+  - { object: "analog-value,106", name: "TRUE ZONE TEMP",    signal: zone_temp_actual }
+  - { object: "analog-value,107", name: "REHEAT MBH",        signal: reheat_mbh }
+  - { object: "analog-value,108", name: "ZONE LOAD",         signal: zone_load }
+  - { object: "analog-value,109", name: "ZONE CO2",          signal: zone_co2 }
+  - { object: "analog-value,110", name: "OVERRIDE REMAINING", signal: override_remaining }
+  - { object: "binary-value,101", name: "OCCUPIED",          signal: occupied }
+
+demo:
+  logic: vav

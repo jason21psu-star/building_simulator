@@ -181,8 +181,10 @@ class Ahu(EquipmentModel):
         SignalDef("return_plenum_p", _A, "inchesOfWater", "Return plenum static"),
         SignalDef("building_p", _A, "inchesOfWater", "Building pressure"),
         SignalDef("pf_dp_actual", _A, "inchesOfWater", "True prefilter dP"),
-        SignalDef("vav_demand_cfm", _A, "cubicFeetPerMinute", "Aggregate VAV airflow demand"),
+        SignalDef("vav_demand_cfm", _A, "cubicFeetPerMinute", "Aggregate VAV airflow demand (boxes not simulated)"),
         SignalDef("vav_open_pct", _A, "percent", "Aggregate VAV damper opening"),
+        SignalDef("boxes_cfm", _A, "cubicFeetPerMinute", "Airflow through simulated VAV boxes"),
+        SignalDef("boxes", _A, "noUnits", "Simulated VAV boxes served"),
         SignalDef("zone_temp", _A, "degreesFahrenheit", "Aggregate zone temp"),
         SignalDef("zone_rh", _A, "percentRelativeHumidity", "Aggregate zone RH"),
         SignalDef("zone_co2", _A, "partsPerMillion", "Aggregate zone CO2"),
@@ -299,6 +301,8 @@ class Ahu(EquipmentModel):
         self.p_b = 0.0
         self.bd_pos = {s: 0.0 for s in SF}
         self.q_vav = 0.0
+        self.q_boxes = 0.0
+        self.co2_sa = 450.0
         self.p_sp = 0.0
         # VAV aggregate: conductance cfm / sqrt(in. w.c.)
         self.c_open = D / math.sqrt(p["vav_min_static"])
@@ -383,6 +387,31 @@ class Ahu(EquipmentModel):
 
     # ------------------------------------------------------------- helpers
 
+    def aggregate_share(self) -> float:
+        """Share of the design airflow still served by the aggregate VAV model (the rest is simulated boxes)."""
+        boxes = getattr(self, "boxes", [])
+        covered = sum(b.p["box_max_cfm"] for b in boxes)
+        return max(0.0, (self.p["design_cfm"] - covered) / self.p["design_cfm"])
+
+    def return_air(self) -> tuple:
+        """Return air (temp, humidity ratio, CO2): airflow-weighted mix of the aggregate zone and the simulated zones."""
+        plenum = 1.5 if self._occ else 0.5
+        parts = [(max(self.q_vav, 0.0), self.tz, self.wz, self.co2)]
+        for b in getattr(self, "boxes", []):
+            parts.append((max(b.q, 0.0), b.tz, b.wz, b.co2))
+        total = sum(q for q, *_ in parts)
+        if total < 10.0:
+            share = self.aggregate_share()
+            boxes = getattr(self, "boxes", [])
+            if share > 0 or not boxes:
+                return self.tz + plenum, self.wz, self.co2
+            n = len(boxes)
+            return (sum(b.tz for b in boxes) / n + plenum, sum(b.wz for b in boxes) / n, sum(b.co2 for b in boxes) / n)
+        t = sum(q * tz for q, tz, _, _ in parts) / total
+        w = sum(q * wz for q, _, wz, _ in parts) / total
+        c = sum(q * co2 for q, _, _, co2 in parts) / total
+        return t + plenum, w, c
+
     @property
     def p_dis(self) -> float:
         return getattr(self, "_p_dis", 0.0)
@@ -426,47 +455,71 @@ class Ahu(EquipmentModel):
         return 0.0
 
     def _solve_supply(self) -> None:
+        """
+        Fan array against the duct: aggregate VAV boxes plus any simulated VAV boxes
+        served by this AHU.  One bisection on the duct static at the sensor: the
+        boxes' flow at that static sets the airflow, the airflow sets the fan
+        pressure needed, and the fans' delivery at that pressure must match.
+        """
         p = self.p
         D = p["design_cfm"]
         speeds = {s: self.drives[s].speed_pu for s in SF}
         k_filter = (0.35 * (1.0 + 2.0 * p["filter_loading"]) if not self.fault("filter_blown") else 0.05) / D ** 2
         k_coils = 1.45 / D ** 2                         # preheat, cooling, heating, humidifier, casing
         k_duct = 1.0 / D ** 2                           # fan discharge to the static sensor
-        c_vav = self.c_vav * (0.05 if self.fault("fire_damper_closed") else 1.0)
+        k_int = k_filter + k_coils + k_duct
+        fire = 0.05 if self.fault("fire_damper_closed") else 1.0
+        c_agg = self.c_vav * fire
         c_leak = 4000.0 if self.fault("duct_leak") else 0.0
         suction = max(0.0, -self.p_mp)
         self._k_filter = k_filter
+        boxes = getattr(self, "boxes", [])
+        duct_loss_prev = k_duct * self.q_s * self.q_s
 
-        def system_flow(P: float) -> float:
-            # P = suction + (k_filter + k_coils) Q^2 + k_duct Q^2 + P_sp ;  Q = (c_vav + c_leak) sqrt(P_sp)
-            avail = P - suction
-            if avail <= 0:
+        def box_inlet(b, psp: float) -> float:
+            x = b.p["duct_position"]
+            if x < 0.75:                                  # upstream of the sensor: part of the duct loss still ahead
+                return psp + (0.75 - x) / 0.75 * duct_loss_prev
+            return psp * b.inlet_factor()
+
+        def flows(psp: float) -> float:
+            if psp <= 0:
                 return 0.0
-            c = c_vav + c_leak
-            return math.sqrt(avail / (k_filter + k_coils + k_duct + 1.0 / max(c, 1.0) ** 2))
+            q = (c_agg + c_leak) * math.sqrt(psp)
+            for b in boxes:
+                q += fire * b.flow_at(box_inlet(b, psp))
+            return q
+
+        def fans_at(P: float) -> float:
+            return sum(self._fan_flow(s, P, speeds[s]) for s in SF)
 
         hi = max([6.0 * sp * sp for sp in speeds.values()] + [0.0])
-        if hi <= 0.01:
-            Q, P = 0.0, 0.0
-        else:
-            lo, top = 0.0, hi + 1.0
-            for _ in range(50):
+        psp = 0.0
+        if hi > 0.01:
+            lo, top = 0.0, hi
+            for _ in range(40):
                 mid = (lo + top) / 2.0
-                fans = sum(self._fan_flow(s, mid, speeds[s]) for s in SF)
-                if fans > system_flow(mid):
+                q = flows(mid)
+                if fans_at(suction + k_int * q * q + mid) > q:
                     lo = mid
                 else:
                     top = mid
-            P = (lo + top) / 2.0
-            Q = max(0.0, system_flow(P))
+            psp = (lo + top) / 2.0
+        Q = flows(psp)
+        P = suction + k_int * Q * Q + psp if Q > 0 else 0.0
         self.p_fan = P
         for s in SF:
             self.q_fan[s] = self._fan_flow(s, P, speeds[s]) if Q > 0 else 0.0
         self.q_s = Q
-        c = c_vav + c_leak
-        self.p_sp = (Q / max(c, 1.0)) ** 2
-        self._p_dis = self.p_sp + k_duct * Q * Q
-        self.q_vav = c_vav * math.sqrt(self.p_sp)
+        self.p_sp = psp
+        self._p_dis = psp + k_duct * Q * Q
+        self.q_vav = c_agg * math.sqrt(psp) if psp > 0 else 0.0
+        self.q_boxes = 0.0
+        for b in boxes:
+            pin = box_inlet(b, psp) if Q > 0 else 0.0
+            b._p_in_from_ahu = pin
+            b._q_from_ahu = fire * b.flow_at(pin)
+            self.q_boxes += b._q_from_ahu
 
     def _solve_return(self) -> None:
         """Return fan, dampers and building pressure for the current supply flow."""
@@ -573,10 +626,12 @@ class Ahu(EquipmentModel):
             demand_pct = p["occ_demand"] + p["occ_peak"] * max(0.0, math.cos((hour - 14.0) / 8.0 * math.pi))
         else:
             demand_pct = p["unocc_demand"]
-        self._demand = p["design_cfm"] * demand_pct / 100.0
+        share = self.aggregate_share()
+        self._demand = p["design_cfm"] * share * demand_pct / 100.0
+        c_open = self.c_open * share
         p_sp = getattr(self, "p_sp", 0.0)
         c_target = self._demand / math.sqrt(max(p_sp, 0.02))
-        c_target = max(0.05 * self.c_open, min(self.c_open, c_target))
+        c_target = max(0.05 * c_open, min(c_open, c_target))
         self.c_vav += (c_target - self.c_vav) * min(1.0, h / 15.0)    # boxes re-position over ~15 s
 
         # ---------------- airflow ----------------
@@ -586,8 +641,7 @@ class Ahu(EquipmentModel):
 
         # ---------------- air conditions through the unit ----------------
         t_oa, w_oa = p["oat"], p["oa_w"]
-        t_ra = self.tz + (1.5 if self._occ else 0.5)      # plenum gain from lights
-        w_ra = self.wz
+        t_ra, w_ra, co2_ra = self.return_air()            # zones + plenum gain from lights
         qoa, qra = max(0.0, self.q_oa), max(0.0, self.q_ra)
         if Qs > 100.0 and qoa + qra > 1.0:
             t_mix = (qoa * t_oa + qra * t_ra) / (qoa + qra)
@@ -641,31 +695,33 @@ class Ahu(EquipmentModel):
             self.hl_tripped = False
 
         # ---------------- building (aggregate zones) ----------------
-        scale = p["load_scale"] / 100.0
+        share = self.aggregate_share()
+        scale = p["load_scale"] / 100.0 * share
         occ = self._occ
-        people = p["people"] if occ else 0.0
+        people = p["people"] * share if occ else 0.0
         internal = scale * ((410000.0 if occ else 80000.0) + 250.0 * people)      # Btu/h lights/equip + people
-        env = 3000.0 * (t_oa - self.tz)
-        supply = SENSIBLE * Qs * (t5 - self.tz)
+        env = 3000.0 * share * (t_oa - self.tz)
+        supply = SENSIBLE * self.q_vav * (t5 - self.tz)
         heat_sp = p["zone_heat_sp"] if occ else p["zone_heat_sp_unocc"]
         net = internal + env + supply
-        C_z = 30000.0
+        C_z = 30000.0 * max(share, 0.05)
         tz_new = self.tz + net / C_z * h / 3600.0
         if tz_new < heat_sp:
             tz_new = max(tz_new, min(heat_sp, self.tz + 0.02 * h))   # VAV reheat / perimeter heat holds heating setpoint
         self.tz = tz_new
-        m_zone = 18000.0                                  # lb dry air in the zones
+        m_zone = 18000.0 * max(share, 0.05)               # lb dry air in the aggregate zones
         latent_lb_h = scale * people * 0.2
         infil = max(0.0, -self.q_ea) + max(0.0, -self.p_b) * 0.0
-        dw = (AIR_LB_PER_CFM_H * Qs * (w5 - self.wz) + latent_lb_h
+        dw = (AIR_LB_PER_CFM_H * self.q_vav * (w5 - self.wz) + latent_lb_h
               + AIR_LB_PER_CFM_H * infil * (w_oa - self.wz)) / m_zone
         self.wz = max(0.0005, self.wz + dw * h / 3600.0)
         w_satz = psychro.w_sat(self.tz, pa)
         self.wz = min(self.wz, w_satz)
-        vol = 600000.0                                    # ft3
-        co2_sa = (qoa * 420.0 + qra * self.co2) / max(qoa + qra, 1.0) if Qs > 100 else self.co2
+        vol = 600000.0 * max(share, 0.05)                 # ft3
+        co2_sa = (qoa * 420.0 + qra * co2_ra) / max(qoa + qra, 1.0) if Qs > 100 else co2_ra
+        self.co2_sa = co2_sa                              # simulated VAV zones receive this
         gen = people * 0.0105                             # cfm CO2
-        dco2 = (Qs * (co2_sa - self.co2) + gen * 1e6 + 300.0 * (420.0 - self.co2)) / vol
+        dco2 = (self.q_vav * (co2_sa - self.co2) + gen * 1e6 + 300.0 * share * (420.0 - self.co2)) / vol
         self.co2 += dco2 * h / 60.0
 
     # ------------------------------------------------------------- publish
@@ -680,14 +736,14 @@ class Ahu(EquipmentModel):
         n = p["sensor_noise"]
         Qs = self.q_s
         pf_dp = self._k_filter * Qs * Qs if hasattr(self, "_k_filter") else 0.0
-        t_ra = self.tz + (1.5 if self._occ else 0.5)
+        t_ra, w_ra, co2_ra = self.return_air()
         rh_sa = psychro.rh_from_w(self.t_sa, self.w_sa, pa)
-        rh_ra = psychro.rh_from_w(t_ra, self.wz, pa)
+        rh_ra = psychro.rh_from_w(t_ra, w_ra, pa)
 
         # sensors (faults applied) -> ALC
         s["ma_temp"] = round(self.t_ph + self._noise(n) + (self.fault_value("mat_offset") if self.fault("mat_offset") else 0.0), 2)
         s["pf_dp"] = round((-pf_dp if self.fault("pf_tubes_reversed") else pf_dp) + self._noise(0.003), 3)
-        s["ra_co2"] = round(self.fault_value("co2_failed") if self.fault("co2_failed") else self.co2 + self._noise(5), 0)
+        s["ra_co2"] = round(self.fault_value("co2_failed") if self.fault("co2_failed") else co2_ra + self._noise(5), 0)
         s["ra_rh"] = round(min(100.0, rh_ra + self._noise(0.3) + (self.fault_value("ra_rh_drift") if self.fault("ra_rh_drift") else 0.0)), 1)
         s["ra_temp"] = round(t_ra + self._noise(n) + (self.fault_value("rat_offset") if self.fault("rat_offset") else 0.0), 2)
         s["sa_rh"] = round(self.fault_value("sa_rh_failed") if self.fault("sa_rh_failed") else min(100.0, rh_sa + self._noise(0.3)), 1)
@@ -747,7 +803,9 @@ class Ahu(EquipmentModel):
         s["building_p"] = round(self.p_b, 3)
         s["pf_dp_actual"] = round(pf_dp, 3)
         s["vav_demand_cfm"] = round(self._demand, 0)
-        s["vav_open_pct"] = round(100.0 * self.c_vav / self.c_open, 1)
+        s["vav_open_pct"] = round(100.0 * self.c_vav / max(self.c_open * self.aggregate_share(), 1.0), 1)
+        s["boxes_cfm"] = round(getattr(self, "q_boxes", 0.0), 0)
+        s["boxes"] = len(getattr(self, "boxes", []))
         s["zone_temp"] = round(self.tz, 2)
         s["zone_rh"] = round(psychro.rh_from_w(self.tz, self.wz, pa), 1)
         s["zone_co2"] = round(self.co2, 0)

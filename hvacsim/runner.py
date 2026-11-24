@@ -48,6 +48,7 @@ class UnitSim:
             self.app, self.model, inst.get("controller") or {}, host.directory, host.ip_network)
         self.started_at = time.monotonic()
         self.weather: Optional["UnitSim"] = None          # host weather station feeding this unit
+        self.served_by: Optional["UnitSim"] = None        # AHU whose duct this unit sits in
         self.weather_params: Dict[str, str] = {}
         self.address = f"{host.virtual_network}:{inst['mac']}"
         self.events: deque = deque(maxlen=200)
@@ -119,6 +120,7 @@ class UnitSim:
             "conditions": m.CONDITIONS,
             "weather_driven": list(self.weather_params),
             "weather_source": self.weather.name if self.weather else None,
+            "served_by": self.served_by.name if self.served_by else None,
             "actions": m.ACTIONS,
             "faults": [
                 {"name": f.name, "label": f.label, "group": f.group, "kind": f.kind,
@@ -166,6 +168,7 @@ class Host:
         self.router = bacnet_io.build_router(h, self.vlan_name, DEMO_LAN if demo else None)
         self.units: List[UnitSim] = [UnitSim(inst, self) for inst in cfg["instances"]]
         self.weather = self._link_weather(h.get("weather"))
+        self._link_air()
         self.mocks = self._build_demo_controllers() if (demo and demo_controllers) else []
 
     def unit(self, name: Optional[str]) -> UnitSim:
@@ -195,8 +198,27 @@ class Host:
         self.units.insert(0, wx)
         return wx
 
+    def _link_air(self) -> None:
+        """Connect units with `served_by: <AHU>` to that AHU's duct (VAV boxes)."""
+        for u in self.units:
+            name = u.cfg.get("served_by")
+            if not name:
+                continue
+            try:
+                ahu = self.unit(name)
+            except KeyError:
+                raise SystemExit(f"{u.name}: served_by {name!r} is not an instance on this host")
+            if not hasattr(ahu.model, "boxes"):
+                ahu.model.boxes = []
+            u.model.supply = ahu.model
+            ahu.model.boxes.append(u.model)
+            u.served_by = ahu
+        # step order: weather station, then air handlers, then what they serve
+        rank = {"weather_station": 0, "ahu_vav_econ": 1}
+        self.units.sort(key=lambda u: rank.get(u.model.TYPE, 2))
+
     def _build_demo_controllers(self):
-        from .mockalc import AhuDemoLogic, MockController, Thermostat
+        from .mockalc import AhuDemoLogic, MockController, Thermostat, VavDemoLogic
 
         mocks: Dict[int, MockController] = {}
         for unit in self.units:
@@ -218,6 +240,9 @@ class Host:
                     zone_name = name
             if demo_cfg.get("logic") == "ahu":
                 mock.logics.append(AhuDemoLogic(mock, int(unit.cfg["device_instance"]), label=unit.name))
+            elif demo_cfg.get("logic") == "vav":
+                mock.logics.append(VavDemoLogic(mock, int(unit.cfg["device_instance"]),
+                                                float(unit.model.p["box_max_cfm"]), label=unit.name))
             for w in demo_cfg.get("writes", []) or []:
                 mock.add_network_output(int(unit.cfg["device_instance"]), w["object"], w["value"],
                                         int(w.get("priority", 10)), label=unit.name)

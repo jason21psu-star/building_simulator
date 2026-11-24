@@ -3,6 +3,7 @@
 from .ahu import Ahu
 from .base import EquipmentModel, FaultDef, SignalDef
 from .unit_heater import HotWaterUnitHeater
+from .vav import VavReheat
 from .vfd_fan import VfdFan
 from .weather_station import WeatherStation
 
@@ -11,6 +12,7 @@ MODELS = {
     VfdFan.TYPE: VfdFan,
     WeatherStation.TYPE: WeatherStation,
     Ahu.TYPE: Ahu,
+    VavReheat.TYPE: VavReheat,
 }
 
 __all__ = ["EquipmentModel", "FaultDef", "SignalDef", "MODELS"]

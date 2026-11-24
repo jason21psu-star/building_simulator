@@ -22,6 +22,7 @@ that network, the same way MS/TP devices sit behind a router:
            ├── UH-1-SIM  device 4010001  address 5001:1   BO-1 HWV_CMD …
            ├── UH-2-SIM  device 4010002  address 5001:2   BO-1 HWV_CMD …
            ├── AHU-1     device 4010020  address 5001:20  AO-1..10, BO-1..6 terminals; 27 values to ALC 240107
+           ├── VAV-1…6   device 4010101-106  address 5001:101-106  AO-1 dmpr_1, AO-2 rh_vlv_1; to ALC 240901-240906
            ├── SF-1-VFD  device 4010011  address 5001:11  ACH580 object list (fieldbus)
            └── SF-2-VFD  device 4010012  address 5001:12  DI1/AI1 terminals (hardwired)
 ```
@@ -45,6 +46,7 @@ that network, the same way MS/TP devices sit behind a router:
 | `hw_unit_heater` | A (virtual I/O) | Hot water unit heater, 2-position valve, aquastat fan interlock (90 °F on / 80 °F off), 0-10 A CT on the fan motor |
 | `weather_station` | B (ALC reads it) | Shared outdoor air temp/RH for the ALC system and every simulator on the host. Derived dew point, enthalpy and wet bulb, sensor faults, "device offline" |
 | `ahu_vav_econ` | A (virtual I/O) | VAV AHU with economizer, 4-fan supply array with barometric dampers, return fan: 5 ACH580-style drives, preheat / CHW / HW coils with 2-way valves, steam humidifier with high limit, freezestat / high-static / smoke safety chain to drive DI4, aggregate VAV + building model. 43 hardware points. See [docs/AHU_DESIGN.md](docs/AHU_DESIGN.md) |
+| `vav_rh` | A (virtual I/O) | Single-duct VAV with HW reheat, no fan: integrated 154 s damper actuator, airflow in cfm, 2-10 V reheat valve, zone with loads / humidity / CO2, zone sensor setpoint adjust (±1-5 °F) and override button (+30 min, max 120). Sits in an AHU's duct (`served_by`). Boxes come from a CSV schedule. See [docs/VAV_DESIGN.md](docs/VAV_DESIGN.md) |
 | `vfd_fan` | A or B | ABB ACH580-style VFD driving a plenum fan: keypad Hand/Off/Auto, ACH580 parameters, fault codes, hardwired (DI1/AI1/RO/AO) or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md) |
 
 ## Quick start
@@ -82,6 +84,8 @@ python -m hvacsim configs/station-1.yaml --address 192.168.1.51/24 --controller 
 configs/station-1.yaml                       the host: router, network numbers, instances
 configs/templates/weather_station.yaml       weather station objects
 configs/templates/ahu_vav_econ.yaml          AHU points list (43 hardware points)
+configs/templates/vav_rh.yaml                VAV box points list
+configs/vav_schedule.csv                     VAV schedule: one row per box (controller device, size, zone)
 configs/templates/hw_unit_heater.yaml        unit heater points list
 configs/templates/vfd_ach580_bacnet.yaml     ACH580-style drive, BACnet fieldbus control
 configs/templates/vfd_ach580_hardwired.yaml  ACH580-style drive, hardwired control
@@ -245,7 +249,8 @@ hvacsim/
   models/components/vfd.py  ACH580-style drive component (reused by the AHU fan array)
   models/vfd_fan.py      Standalone drive + motor + fan
   models/weather_station.py  Weather station
-  models/ahu.py          VAV AHU (fan array, coils, safeties, VAV + building aggregate)
+  models/ahu.py          VAV AHU (fan array, coils, safeties, duct with VAV boxes)
+  models/vav.py          VAV box with reheat and its zone
   models/components/airside.py  Actuators, valves, dampers, water coils, steam humidifier
   psychro.py             Moist-air psychrometrics (I-P)
   config.py              Host config, templates, {placeholders}, validation

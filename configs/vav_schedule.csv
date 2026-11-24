@@ -1,0 +1,7 @@
+tag,sim_device,mac,controller_device,zone_type,area_sqft,box_max_cfm,people,reheat_gpm,duct_position,stpt_adj_range,description
+VAV-1,4010101,101,240901,north,1000,1200,7,2.0,0.35,3,North offices
+VAV-2,4010102,102,240902,south,1000,1200,7,2.0,0.45,3,South offices
+VAV-3,4010103,103,240903,east,1000,1200,7,2.0,0.55,3,East offices
+VAV-4,4010104,104,240904,west,1000,1200,7,2.0,0.85,3,West offices
+VAV-5,4010105,105,240905,interior,1500,1500,10,2.0,0.65,3,Interior open office
+VAV-6,4010106,106,240906,conference,600,1000,30,2.0,0.95,3,Conference room

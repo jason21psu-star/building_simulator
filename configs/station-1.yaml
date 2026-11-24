@@ -72,3 +72,8 @@ instances:
     mac: 20
     controller:
       device_instance: 240107         # <-- ALC AHU controller device ID (trainee design)
+
+  # --- VAV boxes on AHU-1 (one row per box in the CSV schedule) -----------------
+  - schedule: vav_schedule.csv        # tag, sim_device, mac, controller_device, box size, zone ...
+    template: templates/vav_rh.yaml
+    served_by: AHU-1                  # boxes sit in AHU-1's duct; zones return to AHU-1

@@ -112,6 +112,59 @@ class AhuDemoLogic:
         self.status = f"static {v('sa_static'):.2f} -> fans {self.speed:.0f} %, SAT {sat:.1f} -> clg {self.clg:.0f} % htg {self.htg:.0f} %"
 
 
+class VavDemoLogic:
+    """
+    Demo-only stand-in for a trainee's VAV program: occupied 75/70 °F (+ setpoint adjust),
+    cooling airflow between 30 % and 100 % of box max, damper PI on airflow (pressure
+    independent), reheat to the heating setpoint with a 95 °F discharge limit.
+    """
+
+    def __init__(self, mock: "MockController", device: int, box_max: float, label: str = "VAV"):
+        self.mock, self.device, self.box_max, self.label = mock, device, box_max, label
+        self.address: Optional[str] = None
+        self.dmpr, self.rh = 50.0, 0.0
+        self.last: Dict[str, Any] = {}
+        self.last_t: Dict[str, float] = {}
+        self.status = ""
+
+    async def tick(self) -> None:
+        m = self.mock
+        if self.address is None:
+            i_ams = await m.app.who_is(self.device, self.device, timeout=3)
+            if not i_ams:
+                self.status = f"VAV device {self.device} not found"
+                return
+            self.address = str(i_ams[0].pduSource)
+        v = lambda n: m.value(n) or 0.0
+        t, adj, flow = v("zone_temp_1"), v("stpt_adj_1"), v("airflow_1")
+        clg, htg = 75.0 + adj, 70.0 + adj
+        mn, mx = 0.3 * self.box_max, self.box_max
+        if t > clg:
+            sp = mn + (mx - mn) * max(0.0, min(1.0, (t - clg) / 2.0))
+        else:
+            sp = mn
+        self.dmpr = max(0.0, min(100.0, self.dmpr + 0.02 * (sp - flow)))
+        if t < htg and v("da_temp_1") < 95.0:
+            self.rh = min(100.0, self.rh + 1.0 * (htg - t) + 0.2)
+        else:
+            self.rh = max(0.0, self.rh - 1.0)
+        outs = {"analog-output,1": self.dmpr, "analog-output,2": 20.0 + 0.8 * self.rh}
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        for obj, val in outs.items():
+            prev = self.last.get(obj)
+            if prev is not None and abs(val - prev) <= 0.5 and now - self.last_t.get(obj, 0.0) < 20.0:
+                continue
+            try:
+                await m.app.write_property(Address(self.address), obj, "present-value", Real(float(val)), priority=10)
+                self.last[obj], self.last_t[obj] = val, now
+            except (Exception, ErrorRejectAbortNack) as err:
+                self.status = f"write {obj} failed: {describe_error(err)}"
+                self.address = None
+                return
+        self.status = f"zone {t:.1f} (clg {clg:.1f}/htg {htg:.1f}) flow {flow:.0f}/{sp:.0f} cfm, damper {self.dmpr:.0f} %, reheat {self.rh:.0f} %"
+
+
 class MockController:
     def __init__(self, device_instance: int, port, name: str = "ALC-MOCK"):
         self.device_instance = int(device_instance)

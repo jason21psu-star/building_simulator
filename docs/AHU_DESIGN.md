@@ -112,7 +112,14 @@ differential (assumed 5 % RH).
   authority). Loop differential pressure is a plant parameter.
 - Actuators have stroke times (valves about 90 s, dampers about 150 s).
 
-## 6. Duct and zones (until the VAV simulators exist)
+## 6. Duct and zones
+
+**Simulated VAV boxes** (`vav_rh`, see `docs/VAV_DESIGN.md`) with
+`served_by: AHU-1` sit in this duct. The AHU's duct static solve includes
+their dampers, and their zones' air makes up the return air. The aggregate
+model below covers the rest of the design airflow (design cfm minus the
+boxes' `box_max_cfm`).
+
 
 The VAV boxes will report damper positions to the ALC program themselves, so
 the AHU simulator does **not** provide any reset data. For duct static

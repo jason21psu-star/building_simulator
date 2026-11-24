@@ -18,6 +18,7 @@ Template strings may contain {placeholders} filled from the instance's
 from __future__ import annotations
 
 import copy
+import csv
 import string
 from pathlib import Path
 from typing import Any, Dict, List
@@ -67,9 +68,85 @@ def load_host_config(path: str) -> Dict[str, Any]:
     cfg = yaml.safe_load(path_obj.read_text()) or {}
     if "host" not in cfg or "instances" not in cfg:
         raise ConfigError(f"{path}: needs 'host' and 'instances' sections")
-    cfg["instances"] = [resolve_instance(inst, path_obj.parent, i) for i, inst in enumerate(cfg["instances"])]
+    expanded: List[Dict[str, Any]] = []
+    for inst in cfg["instances"]:
+        if "schedule" in inst:
+            expanded.extend(expand_schedule(inst, path_obj.parent))
+        else:
+            expanded.append(inst)
+    cfg["instances"] = [resolve_instance(inst, path_obj.parent, i) for i, inst in enumerate(expanded)]
     validate(cfg)
     return cfg
+
+
+# CSV schedule columns that aren't equipment parameters
+SCHEDULE_COLUMNS = {
+    "tag": "name",
+    "sim_device": "device_instance",
+    "mac": "mac",
+    "controller_device": "controller.device_instance",
+    "controller_address": "controller.address",
+    "description": "description",
+}
+
+
+def expand_schedule(entry: Dict[str, Any], base_dir: Path) -> List[Dict[str, Any]]:
+    """
+    Expand a `schedule:` entry (a CSV equipment schedule) into one instance per row.
+
+    Columns: tag, sim_device, mac, controller_device, [controller_address], [description];
+    every other column is an equipment parameter of the template (e.g. box_max_cfm,
+    zone_type).  Blank cells keep the template value.  The rest of the entry
+    (template, served_by, ...) applies to every row.
+    """
+    path = (base_dir / entry["schedule"]).resolve()
+    if not path.is_file():
+        raise ConfigError(f"schedule file not found: {path}")
+    common = {k: v for k, v in entry.items() if k != "schedule"}
+    out: List[Dict[str, Any]] = []
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames or "tag" not in [c.strip() for c in reader.fieldnames]:
+            raise ConfigError(f"{path.name}: needs a header row with at least a 'tag' column")
+        for line_no, row in enumerate(reader, start=2):
+            row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+            if not row.get("tag") or row["tag"].startswith("#"):
+                continue
+            inst = copy.deepcopy(common)
+            params: Dict[str, Any] = {}
+            for col, value in row.items():
+                if value == "" or not col:
+                    continue
+                target = SCHEDULE_COLUMNS.get(col)
+                if target is None:
+                    params[col] = _number(value)
+                elif target.startswith("controller."):
+                    key = target.split(".", 1)[1]
+                    inst.setdefault("controller", {})[key] = _number(value) if key == "device_instance" else value
+                elif target in ("device_instance", "mac"):
+                    try:
+                        inst[target] = int(value)
+                    except ValueError:
+                        raise ConfigError(f"{path.name} line {line_no}: {col} must be a number, got {value!r}")
+                else:
+                    inst[target] = value
+            if params:
+                inst.setdefault("equipment", {}).setdefault("params", {}).update(params)
+            inst["_schedule"] = f"{path.name}:{line_no}"
+            out.append(inst)
+    if not out:
+        raise ConfigError(f"{path.name}: no rows")
+    return out
+
+
+def _number(text: str) -> Any:
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            return float(text)
+        except ValueError:
+            return text
 
 
 def resolve_instance(inst: Dict[str, Any], base_dir: Path, index: int) -> Dict[str, Any]:
