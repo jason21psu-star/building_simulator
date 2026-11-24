@@ -168,7 +168,7 @@ def test_ramp_in_zero_over_fieldbus():
 # ----- start interlock / run permissive (manual behaviour) --------------------
 
 
-def test_start_interlock_default_di4_only_blocks_starting():
+def test_start_interlock_default_di4_blocks_start_and_stops_running_drive():
     m = make()
     assert m.p["start_interlock_1"] == "di4" and m.p["start_interlock_stop_mode"] == "not_used"
     m.set_input("di4", False)
@@ -179,9 +179,29 @@ def test_start_interlock_default_di4_only_blocks_starting():
     m.set_input("di4", True)
     run(m, 20)
     assert m.signals["running"]
-    m.set_input("di4", False)                           # 20.45 Not used: keeps running
-    run(m, 10)
-    assert m.signals["running"] and "AFEE" in m.signals["warnings"]
+    m.set_input("di4", False)                           # opening while running always stops the fan
+    m.step(0.5)
+    assert not m.signals["running"] and m.signals["output_freq"] == 0   # 20.45 Not used -> 21.03 Coast
+    assert "AFEE" in m.signals["warnings"]
+
+
+def test_start_interlock_stop_mode_ramp_and_not_used_follows_21_03():
+    m = make(start_interlock_stop_mode="ramp")
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 100)
+    run(m, 30)
+    m.set_input("di4", False)
+    run(m, 5)
+    assert m.signals["running"] and 30 < m.signals["output_freq"] < 60   # ramping down on 28.73
+    run(m, 30)
+    assert not m.signals["running"]
+    m = make(stop_mode="ramp")                          # 20.45 Not used follows 21.03 = Ramp
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 100)
+    run(m, 30)
+    m.set_input("di4", False)
+    run(m, 5)
+    assert m.signals["running"] and 30 < m.signals["output_freq"] < 60
 
 
 def test_start_interlock_stop_mode_coast():

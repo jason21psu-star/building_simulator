@@ -62,7 +62,7 @@ VFD_DEFAULTS: Dict[str, Any] = {
     "ext1_commands": "in1_start",     # 20.01  (default In1 Start)
     "run_permissive": "selected",     # 20.40  (default Selected)
     "start_interlock_1": "di4",       # 20.41  (default DI4)
-    "start_interlock_stop_mode": "not_used",  # 20.45 (default Not used)
+    "start_interlock_stop_mode": "not_used",  # 20.45 (default Not used = stop per 21.03)
     # 21 Start/stop mode
     "stop_mode": "coast",             # 21.03  (default Coast)
     "zero_speed_limit": 30.0,         # 21.06 rpm
@@ -225,7 +225,6 @@ class Vfd:
         self.zero_speed = True
         self.ramp_in_zero = False
         self.override = False
-        self.interlocked_stop = False   # stopped by a lost start interlock (20.45)
         self._last_reset_bit = False
         self._load_pu = 0.0
 
@@ -404,16 +403,12 @@ class Vfd:
         self.ready = not faulted and sto_ok and not mains_low
         self.started = start and not faulted
 
-        # start interlock: blocks starting; 20.45 decides what losing it does while running
-        stop_mode_lost = p["start_interlock_stop_mode"]
-        interlock_stop = False
-        if not interlock and not self.override:
-            if not self.modulating or stop_mode_lost != "not_used" or self.interlocked_stop:
-                interlock_stop = True
-        if interlock:
-            self.interlocked_stop = False
-        elif interlock_stop and self.modulating:
-            self.interlocked_stop = True
+        # start interlock: an open interlock always prevents starting AND stops a running drive.
+        # 20.45 only selects how it stops: Not used -> the normal stop mode (21.03), Coast, or Ramp.
+        interlock_stop = not interlock and not self.override
+        interlock_stop_mode = p["start_interlock_stop_mode"]
+        if interlock_stop_mode == "not_used":
+            interlock_stop_mode = p["stop_mode"]
 
         allowed = (permissive and sto_ok and not mains_low and not interlock_stop) or (self.override and sto_ok)
         run = self.started and allowed
@@ -424,7 +419,7 @@ class Vfd:
         else:
             target = 0.0
         coast = not run and (faulted or not sto_ok or mains_low or not permissive
-                             or (interlock_stop and stop_mode_lost != "ramp")
+                             or (interlock_stop and interlock_stop_mode == "coast")
                              or (not interlock_stop and p["stop_mode"] == "coast"))
         self.ref_hz = (0.0 if self.ramp_in_zero else ref) if start else self.ref_hz
 

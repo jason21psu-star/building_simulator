@@ -5,7 +5,7 @@
 #    ALC BO  -> drive DI1 (start)        sim object BV-1001 "DI1 TERMINAL"
 #    ALC AO  -> drive AI1 (0-10 V ref)   sim object AV-1001 "AI1 TERMINAL" (% of 10 V)
 #    Safety circuit (freezestat/smoke) -> drive DI4 = 20.41 Start interlock 1 (ACH580 default),
-#      with 20.45 Start interlock stop mode = Coast so an open safety stops a running drive
+#      an open safety stops the drive (and prevents starting); 20.45 = Coast makes it a coast stop
 #    drive RO2 (running)      -> ALC BI  sf{n}_status
 #    drive RO3 (fault, -1)    -> ALC BI  sf{n}_fault   (contact OPENS on fault)
 #    drive AO1 (output freq)  -> ALC AI  sf{n}_speed_fb (% of 10 V)
@@ -25,7 +25,7 @@ equipment:
     ai1_scaled_min: 0.0               # 12.19 Hz
     ai1_scaled_max: 60.0              # 12.20 Hz
     start_interlock_1: di4            # 20.41 safety circuit on DI4 (ACH580 default)
-    start_interlock_stop_mode: coast  # 20.45 default "Not used" would only block starting
+    start_interlock_stop_mode: coast  # 20.45 how it stops (Not used = per 21.03 Stop mode)
     ro1_source: ready_run             # 10.24 (default Damper control; not used here)
     safety_di: 4                      # which DI the simulated safety circuit opens
     min_freq: 12.0                    # 30.13 Hz
