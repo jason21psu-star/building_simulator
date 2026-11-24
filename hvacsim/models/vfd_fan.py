@@ -47,7 +47,8 @@ class VfdFan(EquipmentModel):
     ACTIONS = ["hand", "off", "auto", "reset", "hand_ref"]
 
     INPUTS = [
-        *[SignalDef(f"di{i}", _B, description=f"DI{i} terminal", default=False) for i in range(1, 7)],
+        # DI4 defaults closed: 20.41 Start interlock 1 = DI4 out of the box, normally jumpered or wired
+        *[SignalDef(f"di{i}", _B, description=f"DI{i} terminal", default=(i == 4)) for i in range(1, 7)],
         SignalDef("ai1_pct", _A, "percent", "AI1 terminal, % of 10 V", 0.0),
         SignalDef("efb_run", _B, description="Fieldbus RUN/STOP CMD", default=False),
         SignalDef("efb_ref1_pct", _A, "percent", "Fieldbus INPUT REF 1", 0.0),
@@ -85,7 +86,10 @@ class VfdFan(EquipmentModel):
         SignalDef("ready", _B, description="Ready to run", default=False),
         SignalDef("at_setpoint", _B, description="At setpoint", default=False),
         SignalDef("in_auto", _B, description="Keypad in Auto", default=True),
-        SignalDef("run_enable_act", _B, description="Run enable active", default=True),
+        SignalDef("run_enable_act", _B, description="Run permissive present (20.40)", default=True),
+        SignalDef("start_interlock_ok", _B, description="Start interlock 1 present (20.41)", default=True),
+        SignalDef("ramp_in_zero", _B, description="Reference forced to zero by 28.76", default=False),
+        SignalDef("zero_speed", _B, description="Zero speed (06.19 bit 0)", default=True),
         SignalDef("override_active", _B, description="Override (fire mode) active", default=False),
         SignalDef("fan_rotating", _B, description="Fan wheel turning", default=False),
         SignalDef("forward", _B, description="Direction forward (FWD/REV ACT)", default=False),
@@ -190,7 +194,10 @@ class VfdFan(EquipmentModel):
             "ready": v.ready,
             "at_setpoint": v.at_setpoint,
             "in_auto": v.mode == "auto",
-            "run_enable_act": v._src(p["run_enable_source"], True),
+            "run_enable_act": v._src(p["run_permissive"]),
+            "start_interlock_ok": v._src(p["start_interlock_1"]),
+            "ramp_in_zero": v.ramp_in_zero,
+            "zero_speed": v.zero_speed,
             "override_active": v.override,
             "fan_rotating": speed > 0.03 and not self.fault("coupling_failed") and not self.fault("motor_locked"),
             "forward": v.modulating,

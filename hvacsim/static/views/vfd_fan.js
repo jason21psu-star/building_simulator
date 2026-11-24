@@ -9,10 +9,11 @@
     const d = 'di' + i, out = [];
     if (i === 1 && String(p.ext1_commands).startsWith('in1')) out.push('Start (20.01)');
     if (i === 2 && p.ext1_commands === 'in1_start_in2_dir') out.push('Direction (20.01)');
-    if (p.run_enable_source === d) out.push('Run enable (20.12)');
     if (p.run_permissive === d) out.push('Run permissive (20.40)');
-    if (p.start_interlock_1 === d) out.push('Start interlock 1 (20.41)');
-    if (p.external_event_1 === d) out.push('External event 1 (31.01)');
+    if (p.run_permissive === '-' + d) out.push('Run permissive, inverted (20.40)');
+    if (p.start_interlock_1 === d) out.push('Start interlock 1 (20.41, stop: ' + p.start_interlock_stop_mode + ')');
+    if (p.freq_ramp_in_zero === d) out.push('Ramp in zero (28.76): open = hold 0 Hz');
+    if (p.external_event_1 === d) out.push('External event 1 (31.01, ' + p.external_event_1_type + ')');
     if (p.override_enable && p.override_source === d) out.push('Override (70.03)');
     if (Number(p.safety_di) === i) out.push('safety circuit wired here');
     return out.join(', ') || '<span class="muted">not used</span>';

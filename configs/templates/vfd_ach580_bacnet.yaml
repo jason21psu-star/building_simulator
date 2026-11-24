@@ -18,8 +18,9 @@ equipment:
   params:
     ext1_commands: fieldbus           # 20.01 Ext1 commands = Embedded fieldbus
     ext1_freq_ref1: efb_ref1          # 28.11 Ext1 frequency ref1 = EFB ref1
-    comm_loss_action: fault           # 58.14 -> fault 6681 when the fieldbus goes quiet
-    comm_loss_mode: any_message       # 58.15 any request to the drive (reads count)
+    comm_loss_action: fault           # 58.14 (default) -> fault 6681 when the fieldbus goes quiet
+    comm_loss_mode: any_message       # 58.15 any request to the drive (reads count); default is cw_ref
+    start_interlock_1: selected       # 20.41 default is DI4 - no DI wiring on this fieldbus drive
     comm_loss_time: 30.0              # 58.16 s
     min_freq: 12.0                    # 30.13 Hz
     max_freq: 60.0                    # 30.14 Hz
@@ -58,7 +59,7 @@ monitor:
   - { object: "binary-value,5",  name: "ALARM ACT",      signal: warning_active, active_text: ALARM, inactive_text: OK }
   - { object: "binary-value,7",  name: "DRIVE READY",    signal: ready, active_text: READY, inactive_text: NOT READY }
   - { object: "binary-value,8",  name: "AT SETPOINT",    signal: at_setpoint, active_text: YES, inactive_text: NO }
-  - { object: "binary-value,9",  name: "RUN ENA ACT",    signal: run_enable_act, active_text: ENABLED, inactive_text: DISABLED }
+  - { object: "binary-value,9",  name: "RUN ENA ACT",    signal: run_enable_act, active_text: ENABLED, inactive_text: DISABLED }   # 20.40 run permissive
   - { object: "binary-input,0",  name: "DI 1 ACT",       signal: di1_status }
   - { object: "binary-input,1",  name: "DI 2 ACT",       signal: di2_status }
   - { object: "binary-input,2",  name: "DI 3 ACT",       signal: di3_status }

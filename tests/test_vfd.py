@@ -43,7 +43,7 @@ def test_hardwired_start_and_ai1_scaling():
     m.set_input("di1", True)
     m.set_input("ai1_pct", 80)                  # 8 V -> 48 Hz with 0-10 V = 0-60 Hz
     run(m, 10)
-    assert m.signals["output_freq"] == pytest.approx(20.0, abs=1.0)   # 60 Hz / 30 s = 2 Hz/s
+    assert m.signals["output_freq"] == pytest.approx(30.0, abs=1.0)   # 28.72 default 20 s: 60 Hz / 20 s = 3 Hz/s
     run(m, 40)
     assert m.signals["output_freq"] == pytest.approx(48.0, abs=0.2)
     assert m.signals["ro2"] and m.signals["ro3"]          # running, no fault (RO3 = fault inverted)
@@ -109,6 +109,113 @@ def test_run_permissive_from_safety_circuit():
     m.set_fault("safety_circuit_open", False)
     run(m, 5)
     assert m.signals["running"]                 # resumes without a reset
+
+
+# ----- 28.76 Freq ramp in zero ------------------------------------------------
+
+
+def test_ramp_in_zero_active_holds_zero_speed_running():
+    m = hardwired_running(min_freq=12.0)
+    assert m.signals["output_freq"] == pytest.approx(60.0, abs=0.2)
+    m.set_param("freq_ramp_in_zero", "active")
+    m.step(0.5)
+    assert m.signals["ramp_in_zero"] and m.signals["running"]
+    run(m, 10)
+    assert 0 < m.signals["output_freq"] < 60          # ramping down on 28.73, not coasting
+    run(m, 30)
+    s = m.signals
+    assert s["output_freq"] == 0.0                     # held at zero even with 30.13 = 12 Hz
+    assert s["running"] and s["ro2"]                   # still running: RO2 (running) stays closed
+    assert s["zero_speed"] and s["airflow_cfm"] == 0
+    assert s["motor_current"] == pytest.approx(0.35 * 14.0, abs=0.3)   # magnetizing current only
+    assert "RAMP IN ZERO" in s["status_text"] and s["fault_code"] == 0
+    run(m, 120)                                         # holding zero is not a stall
+    assert m.signals["fault_code"] == 0
+
+
+def test_ramp_in_zero_from_di_releases_without_new_start():
+    m = make(freq_ramp_in_zero="di3")
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 50)                          # 30 Hz
+    run(m, 20)
+    assert m.signals["output_freq"] == 0.0 and m.signals["running"]   # DI3 open = hold zero
+    m.set_input("di3", True)                            # source = 1: normal operation
+    run(m, 20)
+    assert m.signals["output_freq"] == pytest.approx(30.0, abs=0.2)
+    m.set_input("di3", False)
+    run(m, 20)
+    assert m.signals["output_freq"] == 0.0 and m.signals["running"]
+
+
+def test_ramp_in_zero_inactive_by_default_and_not_in_hand():
+    m = make()
+    assert m.p["freq_ramp_in_zero"] == "inactive"
+    m.set_param("freq_ramp_in_zero", "active")
+    m.action("hand")
+    m.action("hand_ref", 20)
+    run(m, 20)
+    assert m.signals["output_freq"] == pytest.approx(20.0, abs=0.2)   # local (Hand) control is not affected
+
+
+def test_ramp_in_zero_over_fieldbus():
+    m = make(ext1_commands="fieldbus", ext1_freq_ref1="efb_ref1", freq_ramp_in_zero="active")
+    m.set_input("efb_run", True)
+    m.set_input("efb_ref1_pct", 80)
+    run(m, 20)
+    assert m.signals["running"] and m.signals["output_freq"] == 0.0 and m.signals["ref_hz"] == 0.0
+
+
+# ----- start interlock / run permissive (manual behaviour) --------------------
+
+
+def test_start_interlock_default_di4_only_blocks_starting():
+    m = make()
+    assert m.p["start_interlock_1"] == "di4" and m.p["start_interlock_stop_mode"] == "not_used"
+    m.set_input("di4", False)
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 50)
+    run(m, 5)
+    assert not m.signals["running"] and "AFEE" in m.signals["warnings"]
+    m.set_input("di4", True)
+    run(m, 20)
+    assert m.signals["running"]
+    m.set_input("di4", False)                           # 20.45 Not used: keeps running
+    run(m, 10)
+    assert m.signals["running"] and "AFEE" in m.signals["warnings"]
+
+
+def test_start_interlock_stop_mode_coast():
+    m = make(start_interlock_stop_mode="coast")
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 50)
+    run(m, 20)
+    m.set_input("di4", False)
+    m.step(0.5)
+    assert not m.signals["running"] and m.signals["output_freq"] == 0
+    m.set_input("di4", True)                            # interlock back: restarts (start still on)
+    run(m, 5)
+    assert m.signals["running"]
+
+
+def test_external_event_as_warning():
+    m = make(external_event_1="di5", external_event_1_type="warning")
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 50)
+    run(m, 10)                                          # DI5 open = event active
+    assert m.signals["fault_code"] == 0 and "A981" in m.signals["warnings"] and m.signals["running"]
+
+
+def test_damper_control_relay_default():
+    m = make(start_interlock_stop_mode="coast")
+    assert m.p["ro1_source"] == "damper_control"
+    m.set_input("di4", False)                           # damper end switch open
+    m.set_input("di1", True)
+    m.set_input("ai1_pct", 50)
+    m.step(0.5)
+    assert m.signals["ro1"] and not m.signals["running"]   # relay opens the damper, drive waits
+    m.set_input("di4", True)                            # end switch made
+    run(m, 2)
+    assert m.signals["running"]
 
 
 def test_sto_trips_5091_and_reset():

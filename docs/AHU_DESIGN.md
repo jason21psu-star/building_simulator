@@ -57,7 +57,11 @@ Freezestat, high static switch, RA smoke and SA smoke are each:
 
 1. monitored by the ALC controller on their own **BI** (aux contact), and
 2. wired in **series** into **DI4** of every drive (SF-1…4 and RF), set as
-   **20.41 Start interlock 1 = DI4**.
+   **20.41 Start interlock 1 = DI4** (the ACH580 default) **and
+   20.45 Start interlock stop mode = Coast**. Per the ACH580 manual, 20.41
+   only *inhibits starting*. With 20.45 at its default (*Not used*), a safety
+   that opens while the fans run would **not** stop them. Leaving 20.45 at
+   default is a deliberate fault scenario for training.
 
 When any device opens, all five drives stop at the drive level, whatever the
 controller program does. The freezestat and high static switch latch until
@@ -202,7 +206,7 @@ On the host's virtual network:
 | Dampers | Actuator failed (spring return), linkage slipped, stuck damper, OA damper leakage |
 | Filter | Loading over time, blown filter |
 | Coils / valves | Valve stuck, actuator failed, broken 2-10 V wire, plant off, low CHW/HW temp, **preheat coil freeze** (water in the tubes below freezing at low flow; it stays damaged until reset) |
-| Safeties | Freezestat trip / failed, high static trip (e.g. VAV boxes or fire damper closed), smoke detector alarm |
+| Safeties | Freezestat trip / failed, high static trip (e.g. VAV boxes or fire damper closed), smoke detector alarm, a drive with 20.45 left at *Not used* (keeps running through a safety trip) |
 | Fan array | Barometric damper stuck open/closed, plus each drive's faults (drive in Hand, coupling, bearings, …) |
 | Humidifier | No steam, valve stuck open: the high-limit humidistat trips at 75 % RH and closes the valve. Also high-limit humidistat failed (doesn't trip: wet duct, SA RH > 95 %), high-limit setpoint drifted |
 | Sensors | Offset, failed, drifting on any AI; MAT reading stratified air |
