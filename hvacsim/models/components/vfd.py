@@ -62,7 +62,7 @@ VFD_DEFAULTS: Dict[str, Any] = {
     "ext1_commands": "in1_start",     # 20.01  (default In1 Start)
     "run_permissive": "selected",     # 20.40  (default Selected)
     "start_interlock_1": "di4",       # 20.41  (default DI4)
-    "start_interlock_stop_mode": "not_used",  # 20.45 (default Not used = stop per 21.03)
+    "start_interlock_stop_mode": "not_used",  # 20.45 (default Not used = coast stop)
     # 21 Start/stop mode
     "stop_mode": "coast",             # 21.03  (default Coast)
     "zero_speed_limit": 30.0,         # 21.06 rpm
@@ -404,11 +404,11 @@ class Vfd:
         self.started = start and not faulted
 
         # start interlock: an open interlock always prevents starting AND stops a running drive.
-        # 20.45 only selects how it stops: Not used -> the normal stop mode (21.03), Coast, or Ramp.
+        # It coasts (e.g. a high-static trip must let the fan shed duct pressure), whatever 21.03
+        # says; only an explicit 20.45 = Ramp gives a ramped stop.  The drive restarts by itself
+        # when the interlock closes and the start command is still on.
         interlock_stop = not interlock and not self.override
-        interlock_stop_mode = p["start_interlock_stop_mode"]
-        if interlock_stop_mode == "not_used":
-            interlock_stop_mode = p["stop_mode"]
+        interlock_stop_mode = "ramp" if p["start_interlock_stop_mode"] == "ramp" else "coast"
 
         allowed = (permissive and sto_ok and not mains_low and not interlock_stop) or (self.override and sto_ok)
         run = self.started and allowed

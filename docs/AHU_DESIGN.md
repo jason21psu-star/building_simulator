@@ -59,8 +59,10 @@ Freezestat, high static switch, RA smoke and SA smoke are each:
 2. wired in **series** into **DI4** of every drive (SF-1…4 and RF), set as
    **20.41 Start interlock 1 = DI4** (the ACH580 default). An open start
    interlock prevents starting **and stops a running drive**.
-   **20.45 Start interlock stop mode = Coast** sets how it stops
-   (*Not used* follows 21.03 Stop mode, which defaults to Coast).
+   The drive **coasts** to a stop (20.45 *Not used* or *Coast*), so after a
+   high-static trip the fan sheds duct pressure instead of being braked. It
+   **restarts automatically** when the safety is reset and the interlock
+   closes, as long as the start command is still on.
    default is a deliberate fault scenario for training.
 
 When any device opens, all five drives stop at the drive level, whatever the

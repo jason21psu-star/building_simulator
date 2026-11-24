@@ -72,7 +72,7 @@ manual ORs with 28.76.
 | 20.01 | Ext1 commands | In1 Start | `not_selected`, `in1_start`, `in1_start_in2_dir`, `fieldbus` |
 | 20.40 | Run permissive | Selected | Not selected / Selected / DI1-6 / -DI1-6 / Embedded fieldbus (BV-12 RUN ENA CMD). Losing it stops the drive (coast) and shows warning AFED. It restarts by itself when the signal returns |
 | 20.41 | Start interlock 1 | **DI4** | Not selected / Selected / DI1-6 / Embedded fieldbus. Open = **prevents starting and stops a running drive**, warning AFEE. The drive restarts by itself when the interlock closes and the start command is still on |
-| 20.45 | Start interlock stop mode | Not used | How the drive stops when the interlock opens: Not used = per 21.03 Stop mode, Coast, or Ramp |
+| 20.45 | Start interlock stop mode | Not used | How the drive stops when the interlock opens. Not used / Coast = **coast stop regardless of 21.03**, so the fan sheds duct pressure after a high-static trip. Ramp = ramped stop |
 | 21.03 | Stop mode | Coast | Coast / Ramp |
 | 21.06 / 21.07 | Zero speed limit / delay | 30 rpm / 0 ms | A ramped stop ends at the limit, then the motor coasts. Also sets the zero speed status |
 | 12.17-12.20 | AI1 min / max / scaled min / scaled max | 0 V / 10 V / 0 / 60 Hz | |

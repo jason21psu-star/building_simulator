@@ -185,7 +185,7 @@ def test_start_interlock_default_di4_blocks_start_and_stops_running_drive():
     assert "AFEE" in m.signals["warnings"]
 
 
-def test_start_interlock_stop_mode_ramp_and_not_used_follows_21_03():
+def test_start_interlock_coasts_even_with_ramp_stop_mode_and_restarts():
     m = make(start_interlock_stop_mode="ramp")
     m.set_input("di1", True)
     m.set_input("ai1_pct", 100)
@@ -195,13 +195,16 @@ def test_start_interlock_stop_mode_ramp_and_not_used_follows_21_03():
     assert m.signals["running"] and 30 < m.signals["output_freq"] < 60   # ramping down on 28.73
     run(m, 30)
     assert not m.signals["running"]
-    m = make(stop_mode="ramp")                          # 20.45 Not used follows 21.03 = Ramp
+    m = make(stop_mode="ramp")                          # 20.45 Not used: coasts even though 21.03 = Ramp
     m.set_input("di1", True)
     m.set_input("ai1_pct", 100)
     run(m, 30)
-    m.set_input("di4", False)
-    run(m, 5)
-    assert m.signals["running"] and 30 < m.signals["output_freq"] < 60
+    m.set_input("di4", False)                           # e.g. high-static switch trips
+    m.step(0.5)
+    assert not m.signals["running"] and m.signals["output_freq"] == 0 and m.signals["fan_rotating"]
+    m.set_input("di4", True)                            # interlock closes, DI1 start still made
+    m.step(0.5)
+    assert m.signals["running"] and m.signals["output_freq"] > 20   # restarts (flying start), no new start
 
 
 def test_start_interlock_stop_mode_coast():
