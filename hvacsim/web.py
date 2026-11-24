@@ -72,9 +72,7 @@ async def start_web(host, bind: str, port: int) -> web.AppRunner:
                 unit.model.set_param(name, value)
             except (KeyError, ValueError) as err:
                 raise web.HTTPBadRequest(text=str(err))
-            info = unit.model.PARAM_INFO.get(name)
-            label = f"{info.id} {info.label}" if info and info.id else name
-            unit.event(f"parameter {label} = {unit.model.p[name]}")
+            unit.event(f"parameter {unit.model.param_label(name)} = {value}")
         return web.json_response({"ok": True})
 
     @routes.post("/api/controller")

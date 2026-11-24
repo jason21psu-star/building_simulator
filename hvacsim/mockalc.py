@@ -51,12 +51,74 @@ class Thermostat:
     status: str = ""
 
 
+class AhuDemoLogic:
+    """
+    A deliberately simple stand-in for a trainee's AHU program (demo mode only):
+    all fans on, duct static PI on the four supply fan speeds, return fan tracking
+    at 80 %, SAT 55 °F on cooling / heating, preheat to MAT 45 °F, OA dampers at minimum.
+    Signals are written as % of 10 V (valves/dampers 2-10 V, drive speeds 0-10 V).
+    """
+
+    def __init__(self, mock: "MockController", device: int, label: str = "AHU"):
+        self.mock, self.device, self.label = mock, device, label
+        self.address: Optional[str] = None
+        self.speed, self.clg, self.htg, self.ph = 50.0, 0.0, 0.0, 0.0
+        self.last: Dict[str, Any] = {}
+        self.last_t: Dict[str, float] = {}
+        self.status = ""
+
+    async def tick(self) -> None:
+        m = self.mock
+        if self.address is None:
+            i_ams = await m.app.who_is(self.device, self.device, timeout=3)
+            if not i_ams:
+                self.status = f"AHU device {self.device} not found"
+                return
+            self.address = str(i_ams[0].pduSource)
+        v = lambda n: m.value(n) or 0.0
+        safeties = all(m.value(n) is not False for n in ("frz_stat", "hi_static", "ra_smoke", "sa_smoke"))
+        self.speed = max(30.0, min(100.0, self.speed + 1.5 * (1.5 - v("sa_static"))))
+        sat = v("sa_temp")
+        self.clg = max(0.0, min(100.0, self.clg + 0.6 * (sat - 55.0)))
+        self.htg = max(0.0, min(100.0, self.htg + 0.6 * (52.0 - sat))) if self.clg < 1 else 0.0
+        self.ph = max(0.0, min(100.0, self.ph + 0.8 * (45.0 - v("ma_temp"))))
+        if not safeties:
+            self.clg, self.ph = 50.0, 100.0          # freeze protection per the sequence
+        two_ten = lambda pct: 20.0 + 0.8 * pct
+        outs = {
+            "binary-output,2": True, **{f"binary-output,{i}": True for i in range(3, 7)},   # RF + SF1-4 start
+            "analog-output,1": two_ten(20.0 if safeties else 0.0),                            # min OA 20 %
+            "analog-output,2": two_ten(self.ph),
+            "analog-output,3": two_ten(self.clg),
+            "analog-output,4": two_ten(self.htg),
+            "analog-output,6": max(20.0, 0.8 * self.speed),                                   # RF tracks 80 %
+            **{f"analog-output,{i}": self.speed for i in range(7, 11)},                       # SF1-4 speed
+        }
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        for obj, val in outs.items():
+            prev = self.last.get(obj)
+            changed = prev is None or (abs(float(val) - float(prev)) > 0.5 if not isinstance(val, bool) else val != prev)
+            if not changed and now - self.last_t.get(obj, 0.0) < 20.0:
+                continue
+            pv = (BinaryPV.active if val else BinaryPV.inactive) if isinstance(val, bool) else Real(float(val))
+            try:
+                await m.app.write_property(Address(self.address), obj, "present-value", pv, priority=10)
+                self.last[obj], self.last_t[obj] = val, now
+            except (Exception, ErrorRejectAbortNack) as err:
+                self.status = f"write {obj} failed: {describe_error(err)}"
+                self.address = None
+                return
+        self.status = f"static {v('sa_static'):.2f} -> fans {self.speed:.0f} %, SAT {sat:.1f} -> clg {self.clg:.0f} % htg {self.htg:.0f} %"
+
+
 class MockController:
     def __init__(self, device_instance: int, port, name: str = "ALC-MOCK"):
         self.device_instance = int(device_instance)
         self.app = Application.from_object_list([_device(device_instance, name, modelName="Mock ALC controller"), port])
         self.thermostats: List[Thermostat] = []
         self.outputs: List[Dict[str, Any]] = []
+        self.logics: List[Any] = []
         self._next_av = 100
 
     # ----- objects ------------------------------------------------------
@@ -139,6 +201,8 @@ class MockController:
             await asyncio.sleep(1.0)
             if self.outputs and tick % 10 == 0:
                 await self._network_outputs()
+            for logic in self.logics:
+                await logic.tick()
             tick += 1
             for t in self.thermostats:
                 temp = self.value(t.zone_object) or 0.0
@@ -177,4 +241,5 @@ class MockController:
             "thermostats": [{"label": t.label, "call": t.call, "status": t.status} for t in self.thermostats],
             "outputs": [{"label": o["label"], "object": o["object"], "value": o["value"], "status": o["status"]}
                         for o in self.outputs],
+            "logics": [{"label": lg.label, "status": lg.status} for lg in self.logics],
         }

@@ -1,9 +1,10 @@
-# AHU simulator: physical design (draft for review)
+# AHU simulator: physical design
 
 Source documents: `vav_ahu_econ` sequence of operation, points list and
 flow diagram (ALC equipment builder), with the changes agreed in review.
-**No simulator code has been written against this yet.** Mark up anything
-that's wrong.
+Implemented as equipment type `ahu_vav_econ`
+(`hvacsim/models/ahu.py`, template `configs/templates/ahu_vav_econ.yaml`).
+See section 12 for how each part is simulated.
 
 ## 1. Air path
 
@@ -63,7 +64,6 @@ Freezestat, high static switch, RA smoke and SA smoke are each:
    high-static trip the fan sheds duct pressure instead of being braked. It
    **restarts automatically** when the safety is reset and the interlock
    closes, as long as the start command is still on.
-   default is a deliberate fault scenario for training.
 
 When any device opens, all five drives stop at the drive level, whatever the
 controller program does. The freezestat and high static switch latch until
@@ -232,3 +232,26 @@ Decided in review:
 Still open:
 
 1. **VFD changes** you're still testing. These affect all five AHU drives.
+
+## 12. How it's simulated
+
+| Part | Model |
+|---|---|
+| Fan array | Each fan: `P = 6.0·(s² − (Q/16 000)²)` in. w.c. (8,000 cfm at 4.5 in. at full speed). The fans run in parallel into the common plenum, and the solver finds the plenum pressure where the fans' flow equals the system flow. A fan that can't overcome the plenum pressure delivers nothing (barometric damper closed). With its damper stuck open it flows backward |
+| Fan load on the drives | Torque ≈ 0.87·s²·(0.4 + 1.2·φ), where φ is the fan's flow coefficient: design 0.87 pu, shutoff about 35 %, free delivery overloads. The return fan works the same way (0.69 pu at design) |
+| Supply system | Internal losses (filter 0.35-1.05 in. with loading, coils/casing 1.45 in. at design), duct to the static sensor (1.0 in.), aggregate VAV boxes. The mixing-plenum suction from the return-side solve feeds back into the supply side |
+| VAV boxes (aggregate) | Pressure independent: conductance moves toward `demand / √(static)` over about 15 s, from fully open (design flow at 0.75 in.) down to 5 %. Demand follows the occupancy schedule (Mon-Fri 06-18, 70 % + midday peak, 25 % unoccupied) or the live override. "Starved" when static is too low to deliver the demand |
+| Return side | Return fan curve, return duct, EA/RA/OA dampers (opposed blade, 2 % leakage) and building leakage, solved for return flow, return plenum, mixing plenum and building pressure. Speed tracking can make the return fan overpower the supply at low airflow, pushing air **out** through the OA damper |
+| Coils | Lumped water/metal node. Leaving air approaches the coil surface (mean of entering and leaving water) by a contact factor, with dehumidification on the cooling coil. Calibrated to the design points (preheat 35 → 50 °F with 140 °F water; CHW 80 → 53 °F with 44/56 °F, about 90 tons). 2-way equal-percentage valves (authority 0.5) |
+| Coil freezing | Water node below 32 °F for 2 minutes → frozen (no flow); on thawing the coil is burst: half the flow and reduced capacity until **Repair coils**. With the fans off, wind/stack draft through an open OA damper keeps cold air on the coils |
+| Freezestat | Averaging element reading the coldest spot: preheat leaving air minus a stratification share of the OA-to-mixed difference ("poor mixing" fault raises it) |
+| Humidifier | Steam grid, 250 lb/h at full valve; saturation limit (wet duct). The high-limit humidistat cuts actuator power |
+| Building | Aggregate zone: lights and equipment, people (sensible, latent, CO2), envelope UA to the weather station's OAT, supply air. VAV reheat / perimeter heat holds the zone heating setpoint. Return air = zone + plenum gain from lights |
+| Clock | Simulated date/time starts at the host's local time (or `clock_start`) and runs at the host speed. It drives the occupancy schedule |
+| Contacts | Safety BIs are written as contact state, True = closed = normal. Drive fault BIs are RO3 *Fault (-1)*, True = healthy |
+| Demo logic | `--demo` runs a minimal AHU program (`AhuDemoLogic` in `hvacsim/mockalc.py`): duct static PI on the fan speeds, return fan at 80 %, SAT 55 °F, preheat to MAT 45 °F, minimum OA. It's only there to show the simulator working; trainees write the real sequence |
+
+**Not simulated yet:** reverse rotation of a windmilling fan when its drive
+restarts; economizer enthalpy effects beyond the mixing; zone-level detail
+(waits for the VAV simulators); the plant (fixed HW/CHW temperatures and
+loop dP until the boiler and chiller simulators exist).

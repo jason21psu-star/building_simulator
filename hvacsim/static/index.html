@@ -182,7 +182,12 @@ async function setParam(name, value) {
   paramsBuilt = false;
   refresh();
 }
-function keypad(action, value) { post('/api/action', {action, value}); }
+async function keypad(action, value) {
+  const r = await fetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify({unit, action, value})});
+  if (!r.ok) alert(await r.text());
+  refresh();
+}
 
 // ----- equipment views (hvacsim/static/views/<type>.js) -----
 const VIEWS = {};
@@ -318,7 +323,8 @@ async function refresh() {
   $('demo_panel').hidden = !h.demo;
   if (h.demo) $('demo').innerHTML = h.demo_controllers.map(d => `<p><b>Device ${d.device_instance}</b>
     ${d.thermostats.map(t => `<span class="pill ${t.call ? 'on' : ''}">${t.label}: ${t.call ? 'heat call' : 'satisfied'}</span>`).join(' ')}
-    ${d.outputs.map(o => `<span class="pill">${o.label} ${shortObj(o.object)} = ${o.value}</span>`).join(' ')}</p>
+    ${d.outputs.map(o => `<span class="pill">${o.label} ${shortObj(o.object)} = ${o.value}</span>`).join(' ')}
+    ${(d.logics || []).map(l => `<div class="muted">${l.label} demo logic: ${l.status}</div>`).join('')}</p>
     <table><tbody>${d.points.map(p => `<tr><td>${p.name}</td><td class="muted">${shortObj(p.object)}${p.out_of_service ? ' · OOS' : ''}</td><td class="v">${fmt(p.value)}</td></tr>`).join('')}</tbody></table>`).join('');
 
   $('log').innerHTML = s.events.map(e => `<div><span class="muted">${e.t}</span> ${e.text}</div>`).join('');

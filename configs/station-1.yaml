@@ -64,3 +64,11 @@ instances:
     vars: { n: 2 }                    # sf2_status, sf2_fault, sf2_speed_fb
     controller:
       device_instance: 240110
+
+  # --- Air handler ------------------------------------------------------------
+  - name: AHU-1
+    template: templates/ahu_vav_econ.yaml
+    device_instance: 4010020
+    mac: 20
+    controller:
+      device_instance: 240106         # <-- ALC AHU controller device ID (trainee design)

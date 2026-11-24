@@ -113,8 +113,8 @@ class UnitSim:
             "params": m.p,
             "param_info": [
                 {"name": k, "id": i.id, "label": i.label, "group": i.group, "units": i.units,
-                 "choices": i.choices, "minimum": i.minimum, "maximum": i.maximum, "value": m.p[k]}
-                for k, i in m.PARAM_INFO.items()
+                 "choices": i.choices, "minimum": i.minimum, "maximum": i.maximum, "value": v}
+                for k, i, v in m.param_items()
             ],
             "conditions": m.CONDITIONS,
             "weather_driven": list(self.weather_params),
@@ -196,11 +196,12 @@ class Host:
         return wx
 
     def _build_demo_controllers(self):
-        from .mockalc import MockController, Thermostat
+        from .mockalc import AhuDemoLogic, MockController, Thermostat
 
         mocks: Dict[int, MockController] = {}
         for unit in self.units:
-            if not unit.link.points and not (unit.cfg.get("demo") or {}).get("writes"):
+            demo_cfg = unit.cfg.get("demo") or {}
+            if not unit.link.points and not demo_cfg.get("writes") and not demo_cfg.get("logic"):
                 continue   # nothing for a demo controller to do (e.g. the weather station)
             dev = unit.link.device_instance or 240000 + int(unit.cfg["mac"])
             if dev not in mocks:
@@ -215,7 +216,9 @@ class Host:
                 mock.add_point(name, objid, units)
                 if pt.signal == "space_temp":
                     zone_name = name
-            for w in (unit.cfg.get("demo") or {}).get("writes", []) or []:
+            if demo_cfg.get("logic") == "ahu":
+                mock.logics.append(AhuDemoLogic(mock, int(unit.cfg["device_instance"]), label=unit.name))
+            for w in demo_cfg.get("writes", []) or []:
                 mock.add_network_output(int(unit.cfg["device_instance"]), w["object"], w["value"],
                                         int(w.get("priority", 10)), label=unit.name)
             valve = next((c for c in unit.commands if c.input == "valve_cmd"), None)

@@ -141,6 +141,14 @@ class EquipmentModel:
             raise KeyError(f"{self.TYPE}: no parameter named {name!r}")
         self.p[name] = self._checked(name, value)
 
+    def param_items(self) -> List[tuple]:
+        """(name, ParamInfo, value) for every parameter shown on the web page."""
+        return [(k, i, self.p[k]) for k, i in self.PARAM_INFO.items()]
+
+    def param_label(self, name: str) -> str:
+        info = self.PARAM_INFO.get(name)
+        return f"{info.id} {info.label}" if info and info.id else name
+
     def action(self, name: str, value: Any = None) -> None:
         """Web page button (e.g. keypad key).  Override in subclasses."""
         raise KeyError(f"{self.TYPE}: no action named {name!r}")

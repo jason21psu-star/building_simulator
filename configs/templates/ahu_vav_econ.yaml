@@ -1,0 +1,120 @@
+# ===========================================================================
+#  Template: VAV AHU with economizer, 4-fan supply array, return fan
+#  (ALC vav_ahu_econ; physical design in docs/AHU_DESIGN.md)
+# ===========================================================================
+#  Simulator objects the ALC network outputs write (the "wires" to the unit):
+#    AO 1-10  2-10 V valves/dampers and 0-10 V drive speeds, as % of 10 V
+#    BO 1-6   start/stop relays and humidifier enable
+#  Values the simulator writes into the ALC controller (by object name):
+#    18 AI (sensors, CT amps, VFD feedback) and 9 BI (safeties, VFD faults)
+#  Contacts: True = closed = NORMAL for safeties, RO3 closed = healthy drive.
+# ===========================================================================
+
+model_name: VAV AHU (simulated)
+description: VAV AHU, economizer, 4-fan array
+
+equipment:
+  type: ahu_vav_econ
+  params:
+    hw_supply_temp: 140.0
+    chw_supply_temp: 44.0
+    design_cfm: 24000.0
+    fan_design_cfm: 8000.0
+    high_static_setpoint: 4.0         # in. w.c. at the fan discharge (manual reset)
+    freezestat_setpoint: 38.0         # °F (manual reset)
+    hum_high_limit: 75.0              # %RH supply high-limit humidistat (auto reset)
+    occ_days: mon-fri
+    occ_start: 6.0
+    occ_end: 18.0
+    sf_drive: {}                      # ACH580 parameter overrides for SF-1..4, e.g. {accel_time_1: 45}
+    rf_drive: {}                      # ACH580 parameter overrides for the return fan
+
+# --- Terminal objects the ALC controller writes (network outputs) -----------
+commands:
+  - { object: "analog-output,1", name: ma_dmpr, input: ma_dmpr, units: percent, description: "Mixed air dampers (2-10 V), % of 10 V" }
+  - { object: "analog-output,2", name: ph_vlv, input: ph_vlv, units: percent, description: "Preheat valve (2-10 V, NO), % of 10 V" }
+  - { object: "analog-output,3", name: clg_vlv, input: clg_vlv, units: percent, description: "Cooling valve (2-10 V, NC), % of 10 V" }
+  - { object: "analog-output,4", name: htg_vlv, input: htg_vlv, units: percent, description: "Heating valve (2-10 V, NC), % of 10 V" }
+  - { object: "analog-output,5", name: hum_vlv, input: hum_vlv, units: percent, description: "Humidifier steam valve (2-10 V, NC), % of 10 V" }
+  - { object: "analog-output,6", name: rf_vfd_spd, input: rf_vfd_spd, units: percent, description: "Return fan VFD speed (0-10 V), % of 10 V" }
+  - { object: "analog-output,7", name: sf1_vfd_spd, input: sf1_vfd_spd, units: percent, description: "Supply fan 1 VFD speed (0-10 V), % of 10 V" }
+  - { object: "analog-output,8", name: sf2_vfd_spd, input: sf2_vfd_spd, units: percent, description: "Supply fan 2 VFD speed (0-10 V), % of 10 V" }
+  - { object: "analog-output,9", name: sf3_vfd_spd, input: sf3_vfd_spd, units: percent, description: "Supply fan 3 VFD speed (0-10 V), % of 10 V" }
+  - { object: "analog-output,10", name: sf4_vfd_spd, input: sf4_vfd_spd, units: percent, description: "Supply fan 4 VFD speed (0-10 V), % of 10 V" }
+  - { object: "binary-output,1", name: hum_enable, input: hum_enable, description: "Humidifier enable", active_text: ON, inactive_text: "OFF" }
+  - { object: "binary-output,2", name: rf_ss, input: rf_ss, description: "Return fan start/stop", active_text: ON, inactive_text: "OFF" }
+  - { object: "binary-output,3", name: sf1_ss, input: sf1_ss, description: "Supply fan 1 start/stop", active_text: ON, inactive_text: "OFF" }
+  - { object: "binary-output,4", name: sf2_ss, input: sf2_ss, description: "Supply fan 2 start/stop", active_text: ON, inactive_text: "OFF" }
+  - { object: "binary-output,5", name: sf3_ss, input: sf3_ss, description: "Supply fan 3 start/stop", active_text: ON, inactive_text: "OFF" }
+  - { object: "binary-output,6", name: sf4_ss, input: sf4_ss, description: "Supply fan 4 start/stop", active_text: ON, inactive_text: "OFF" }
+
+# --- Values written into the ALC controller (found by object name) ----------
+controller:
+  min_interval: 1.0
+  writes:
+    - { signal: ma_temp, object_name: "ma_temp", demo_object: "analog-input,1", deadband: 0.1, heartbeat: 30 }
+    - { signal: pf_dp, object_name: "pf_dp", demo_object: "analog-input,2", deadband: 0.01, heartbeat: 30 }
+    - { signal: ra_co2, object_name: "ra_co2", demo_object: "analog-input,3", deadband: 10, heartbeat: 30 }
+    - { signal: ra_rh, object_name: "ra_rh", demo_object: "analog-input,4", deadband: 0.5, heartbeat: 30 }
+    - { signal: ra_temp, object_name: "ra_temp", demo_object: "analog-input,5", deadband: 0.1, heartbeat: 30 }
+    - { signal: sa_rh, object_name: "sa_rh", demo_object: "analog-input,6", deadband: 0.5, heartbeat: 30 }
+    - { signal: sa_static, object_name: "sa_static", demo_object: "analog-input,7", deadband: 0.01, heartbeat: 30 }
+    - { signal: sa_temp, object_name: "sa_temp", demo_object: "analog-input,8", deadband: 0.1, heartbeat: 30 }
+    - { signal: rf_amps, object_name: "rf_amps", demo_object: "analog-input,9", deadband: 0.1, heartbeat: 30 }
+    - { signal: rf_vfd_fb, object_name: "rf_vfd_fb", demo_object: "analog-input,10", deadband: 0.5, heartbeat: 30 }
+    - { signal: sf1_amps, object_name: "sf1_amps", demo_object: "analog-input,11", deadband: 0.1, heartbeat: 30 }
+    - { signal: sf2_amps, object_name: "sf2_amps", demo_object: "analog-input,12", deadband: 0.1, heartbeat: 30 }
+    - { signal: sf3_amps, object_name: "sf3_amps", demo_object: "analog-input,13", deadband: 0.1, heartbeat: 30 }
+    - { signal: sf4_amps, object_name: "sf4_amps", demo_object: "analog-input,14", deadband: 0.1, heartbeat: 30 }
+    - { signal: sf1_vfd_fb, object_name: "sf1_vfd_fb", demo_object: "analog-input,15", deadband: 0.5, heartbeat: 30 }
+    - { signal: sf2_vfd_fb, object_name: "sf2_vfd_fb", demo_object: "analog-input,16", deadband: 0.5, heartbeat: 30 }
+    - { signal: sf3_vfd_fb, object_name: "sf3_vfd_fb", demo_object: "analog-input,17", deadband: 0.5, heartbeat: 30 }
+    - { signal: sf4_vfd_fb, object_name: "sf4_vfd_fb", demo_object: "analog-input,18", deadband: 0.5, heartbeat: 30 }
+    - { signal: frz_stat, object_name: "frz_stat", demo_object: "binary-input,1", heartbeat: 30 }
+    - { signal: hi_static, object_name: "hi_static", demo_object: "binary-input,2", heartbeat: 30 }
+    - { signal: ra_smoke, object_name: "ra_smoke", demo_object: "binary-input,3", heartbeat: 30 }
+    - { signal: sa_smoke, object_name: "sa_smoke", demo_object: "binary-input,4", heartbeat: 30 }
+    - { signal: rf_vfd_flt, object_name: "rf_vfd_flt", demo_object: "binary-input,5", heartbeat: 30 }
+    - { signal: sf1_vfd_flt, object_name: "sf1_vfd_flt", demo_object: "binary-input,6", heartbeat: 30 }
+    - { signal: sf2_vfd_flt, object_name: "sf2_vfd_flt", demo_object: "binary-input,7", heartbeat: 30 }
+    - { signal: sf3_vfd_flt, object_name: "sf3_vfd_flt", demo_object: "binary-input,8", heartbeat: 30 }
+    - { signal: sf4_vfd_flt, object_name: "sf4_vfd_flt", demo_object: "binary-input,9", heartbeat: 30 }
+
+# --- Read-only troubleshooting points on the simulator -----------------------
+monitor:
+  - { object: "analog-value,101", name: "SUPPLY CFM", signal: supply_cfm }
+  - { object: "analog-value,102", name: "RETURN CFM", signal: return_cfm }
+  - { object: "analog-value,103", name: "OA CFM", signal: oa_cfm }
+  - { object: "analog-value,104", name: "OA FRACTION", signal: oa_fraction }
+  - { object: "analog-value,105", name: "OA DAMPER POS", signal: oa_dmpr_pos }
+  - { object: "analog-value,106", name: "RA DAMPER POS", signal: ra_dmpr_pos }
+  - { object: "analog-value,107", name: "EA DAMPER POS", signal: ea_dmpr_pos }
+  - { object: "analog-value,108", name: "PH VALVE POS", signal: ph_vlv_pos }
+  - { object: "analog-value,109", name: "CLG VALVE POS", signal: clg_vlv_pos }
+  - { object: "analog-value,110", name: "HTG VALVE POS", signal: htg_vlv_pos }
+  - { object: "analog-value,111", name: "HUM VALVE POS", signal: hum_vlv_pos }
+  - { object: "analog-value,112", name: "TRUE MIXED TEMP", signal: mixed_temp }
+  - { object: "analog-value,113", name: "FREEZESTAT COLDEST", signal: coldest_temp }
+  - { object: "analog-value,114", name: "TRUE SAT", signal: sa_temp_actual }
+  - { object: "analog-value,115", name: "TRUE DUCT STATIC", signal: sa_static_actual }
+  - { object: "analog-value,116", name: "DISCHARGE STATIC", signal: discharge_static }
+  - { object: "analog-value,117", name: "BUILDING PRESSURE", signal: building_p }
+  - { object: "analog-value,118", name: "TRUE FILTER DP", signal: pf_dp_actual }
+  - { object: "analog-value,119", name: "CHW TONS", signal: cc_tons }
+  - { object: "analog-value,120", name: "STEAM LB/H", signal: steam_lb_h }
+  - { object: "analog-value,121", name: "VAV DEMAND CFM", signal: vav_demand_cfm }
+  - { object: "analog-value,122", name: "ZONE TEMP", signal: zone_temp }
+  - { object: "analog-value,123", name: "ZONE CO2", signal: zone_co2 }
+  - { object: "analog-value,124", name: "OA TEMP IN USE", signal: oat }
+  - { object: "binary-value,101", name: "SAFETY CHAIN OK", signal: safety_chain_ok }
+  - { object: "binary-value,102", name: "FREEZESTAT TRIPPED", signal: frz_tripped }
+  - { object: "binary-value,103", name: "HIGH STATIC TRIPPED", signal: hs_tripped }
+  - { object: "binary-value,104", name: "HUM HIGH LIMIT TRIPPED", signal: hum_hl_tripped }
+  - { object: "binary-value,105", name: "SCHEDULE OCCUPIED", signal: occupied }
+  - { object: "binary-value,106", name: "VAV STARVED", signal: starved }
+  - { object: "binary-value,107", name: "PH COIL FROZEN", signal: ph_frozen }
+  - { object: "binary-value,108", name: "CC COIL FROZEN", signal: cc_frozen }
+
+# --- Demo mode only: a simple stand-in for the trainee's AHU program ---------
+demo:
+  logic: ahu
