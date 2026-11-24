@@ -71,4 +71,4 @@ instances:
     device_instance: 4010020
     mac: 20
     controller:
-      device_instance: 240106         # <-- ALC AHU controller device ID (trainee design)
+      device_instance: 240107         # <-- ALC AHU controller device ID (trainee design)
