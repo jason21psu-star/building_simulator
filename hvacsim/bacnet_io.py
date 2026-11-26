@@ -38,9 +38,10 @@ from bacpypes3.basetypes import BinaryPV, EngineeringUnits, ObjectType, Property
 from bacpypes3.errors import PropertyError
 from bacpypes3.local.analog import AnalogInputObject, AnalogOutputObject, AnalogValueObject, AnalogValueObjectCmd
 from bacpypes3.local.binary import BinaryInputObject, BinaryOutputObject, BinaryValueObject, BinaryValueObjectCmd
+from bacpypes3.local.multistate import MultiStateValueObject
 from bacpypes3.local.networkport import NetworkPortObject
 from bacpypes3.pdu import Address
-from bacpypes3.primitivedata import ObjectIdentifier, Real
+from bacpypes3.primitivedata import ObjectIdentifier, Real, Unsigned
 from bacpypes3.vendor import get_vendor_info
 from bacpypes3.vlan import VirtualNetwork
 
@@ -89,6 +90,10 @@ class ReadOnlyBinaryOutput(_ReadOnlyPV, BinaryOutputObject):
     pass
 
 
+class ReadOnlyMultiStateValue(_ReadOnlyPV, MultiStateValueObject):
+    pass
+
+
 class _Stamped:
     """Mix-in: remember when Present_Value was last written over the network (comm-loss supervision)."""
 
@@ -134,6 +139,7 @@ MONITOR_CLASSES = {
     "binary-input": ReadOnlyBinaryInput,
     "analog-output": ReadOnlyAnalogOutput,
     "binary-output": ReadOnlyBinaryOutput,
+    "multi-state-value": ReadOnlyMultiStateValue,
 }
 
 SHORT_TYPES = {
@@ -173,6 +179,8 @@ def _is_binary(objid: ObjectIdentifier) -> bool:
 
 
 def _to_bacnet(objid: ObjectIdentifier, value: Any):
+    if str(objid[0]).startswith("multi-state"):
+        return Unsigned(max(1, int(value) + 1))          # state code 0 = BACnet value 1
     if _is_binary(objid):
         return BinaryPV.active if bool(value) else BinaryPV.inactive
     return Real(float(value))
@@ -384,7 +392,10 @@ def add_monitor_points(app: Application, model: EquipmentModel, cfg: List[Dict[s
             raise ValueError(f"monitor object type {kind} not supported (use {list(MONITOR_CLASSES)})")
         if sdef.kind == "text":
             raise ValueError(f"{c['name']}: signal {c['signal']} is text and cannot be a BACnet object")
-        if kind.startswith("analog"):
+        if kind.startswith("multi-state"):
+            states = [_text(x)[:60] for x in c.get("states") or ["State 0"]]
+            extra = dict(presentValue=Unsigned(1), numberOfStates=len(states), stateText=states)
+        elif kind.startswith("analog"):
             units = c.get("units", sdef.units if sdef.kind == "analog" else "noUnits")
             extra = dict(presentValue=Real(0.0), units=EngineeringUnits(units))
             if kind == "analog-output":
@@ -431,6 +442,8 @@ def last_fieldbus_activity(app: Application, points: List[CommandPoint], params:
 def update_monitors(model: EquipmentModel, points: List[MonitorPoint]) -> None:
     for pt in points:
         new = _to_bacnet(pt.objid, model.signals[pt.signal])
+        if isinstance(new, Unsigned) and int(new) > int(pt.obj.numberOfStates):
+            new = Unsigned(int(pt.obj.numberOfStates))
         if pt.obj.presentValue != new:
             pt.obj.presentValue = new
 

@@ -7,7 +7,10 @@
 #    192.168.0.79:47808  router, device 4010000   (IP network = ip_network)
 #      └── virtual network 5001
 #            ├── UH-1-SIM  device 4010001  MAC 1   -> 5001:1
-#            └── UH-2-SIM  device 4010002  MAC 2   -> 5001:2
+#            ├── UH-2-SIM  device 4010002  MAC 2   -> 5001:2
+#            ├── ...       (VFDs, AHU-1, VAV-1..6, WX-1)
+#            ├── CH-1..3   devices 4010031-033  MAC 31-33  (YORK OptiView BAS objects)
+#            └── CHP-1 I/O devices 4010041-044  MAC 41-44  (one per ALC plant controller)
 # ===========================================================================
 
 host:
@@ -72,8 +75,28 @@ instances:
     mac: 20
     controller:
       device_instance: 240107         # <-- ALC AHU controller device ID (trainee design)
+    chw_from: CHP-1                   # cooling coil fed by the chilled water plant ...
+    chw_branch: EAST                  # ... on the East riser (chw_branches.csv tag)
 
   # --- VAV boxes on AHU-1 (one row per box in the CSV schedule) -----------------
   - schedule: vav_schedule.csv        # tag, sim_device, mac, controller_device, box size, zone ...
     template: templates/vav_rh.yaml
     served_by: AHU-1                  # boxes sit in AHU-1's duct; zones return to AHU-1
+
+  # --- Chilled water plant (one CSV per equipment type) -------------------------
+  - name: CHP-1
+    template: templates/chw_plant.yaml
+    plant:
+      chillers: chw_plant/chillers.csv              # tag, sim_device, mac, controller_device, size ...
+      primary_pumps: chw_plant/primary_pumps.csv
+      secondary_pumps: chw_plant/secondary_pumps.csv
+      condenser_pumps: chw_plant/condenser_pumps.csv
+      cooling_towers: chw_plant/cooling_towers.csv
+      tanks: chw_plant/tanks.csv
+      branches: chw_plant/chw_branches.csv          # risers + remote DP sensor controllers
+      io_devices:                                   # simulator I/O device per ALC plant controller
+        241001: { device_instance: 4010041, mac: 41 }   # CHW plant: chillers, primary pumps, valves
+        241002: { device_instance: 4010042, mac: 42 }   # secondary pumps
+        241003: { device_instance: 4010043, mac: 43 }   # condenser pumps + towers
+        241004: { device_instance: 4010044, mac: 44 }   # thermal storage
+      # controller_addresses: { 241001: 192.168.0.51 } # optional: skip Who-Is

@@ -1,7 +1,10 @@
 # Chilled water plant simulator: physical design (for review)
 
-Status: **design review, nothing built yet.** This records the 22 design
-questions answered in review. Source documents:
+Status: **built** as equipment type `chw_plant`. The model is
+`hvacsim/models/chw_plant.py`, the template `configs/templates/chw_plant.yaml`,
+and the schedules are in `configs/chw_plant/*.csv`. This records the 22
+design questions answered in review. Section 14 describes how each part is
+simulated. Source documents:
 
 - YORK *YK OptiView BAS points list*, Rev K_04d, tab "YK EM or SSS" (BACnet objects and status code tables)
 - YORK *Model YK Style G Operations and Maintenance*, form 160.75-O1.EN.CE (start/stop sequence, capacity control)
@@ -302,3 +305,90 @@ Every file has `tag` and `controller_device`. Blank cells keep the default, `#` 
    - Low-temperature cycling: shuts down at 4 °F below setpoint, restarts at setpoint.
    - Remote-setpoint behaviour.
 3. Nothing has been tested against a real OptiView / E-Link gateway or ALC integration yet.
+
+## 14. How it is simulated
+
+**Hydraulics.** The hydraulic network is solved every half second of
+simulated time.
+- **Pumps:** pump curves are H = 1.25·H_rated·s² − 0.25·H_rated·(Q/Q_rated)².
+  Each pump branch adds 10 ft of piping loss (suction diffuser, check valve,
+  triple-duty valve), and a check valve stops reverse flow.
+- **Balancer speed:** the system resistances are calibrated so that one pump
+  at 55 Hz gives design flow through its circuit.
+- **Primary and secondary loops:** each is a parallel pump set against a
+  quadratic system curve. They are coupled through the tanks: the flow
+  through the decoupler is solved so that primary = secondary + tank flow.
+  With every tank valved out, primary and secondary run in series, and the
+  building valves limit primary flow.
+- **Overflow:** two primary pumps at 55 Hz into one open chiller give about
+  120 % of design flow, and the evaporator ΔP rises with the square of flow.
+  Review question 5 estimated about 110 %. The difference comes from how the
+  piping losses are split between the pump branches and the chiller branch.
+- **Condenser circuit:** this is an open circuit. Each cell's inlet path lifts
+  water 12 ft to the distribution basin. Each bypass path drops it into the
+  basin at 2 ft. The pumps take suction from basins whose outlet valves are
+  open.
+- **Basin levels:** each basin's level is integrated over time. Inflows are
+  fill, bypass, makeup and equalizer flow. Outflows are the outlet and
+  evaporation. A basin below 4 in. starves the pumps.
+
+**Valves.** Two-position butterfly valves with a 60 s stroke. Flow fraction
+is 1 − (1 − position)³. A closed valve leaks 0.2 %, or 5 % with the seat
+leak fault. The end switches trip at 98 % open and 2 % closed. With the
+end switch fault, "open" trips at 80 %.
+
+**Chiller (`components/york_yk.py`).**
+- **State machine:** pre-lube 50 s, VSD ramp 30 s, run, soft stop,
+  coastdown 150 s.
+- **Capacity:** follows the leaving chilled liquid error at up to +0.4 %/s
+  loading and −1 %/s unloading, with a minimum of 10 %.
+- **Limits:** the current limit, evaporator low-pressure limit (33.5 °F
+  saturation) and condenser high-pressure limit (165 psig) hold or unload
+  the chiller.
+- **Trips:** evaporator low pressure (31.5 °F saturation for 5 s, safety 1),
+  condenser high pressure (180 psig, safety 5) and VSD fault (safety 77)
+  latch until a panel reset. Surge occurs when lift exceeds
+  lift_d·(0.75 + 0.45·load). It gives warning 30, then safety 53 after
+  5 minutes.
+- **Approaches:** evaporator and condenser approaches grow with load and
+  with low water flow.
+- **Power:** kW = design kW × load × part-load factor × (lift / design lift)^1.15.
+- **Refrigerant:** R-134a saturation pressures. The YK O&M manual also lists
+  R-513A and R-1234ze; the simulator uses R-134a.
+
+**Towers.** Effectiveness on the wet bulb is ε = 1 − e^(−NTU). NTU depends
+on the air/water flow ratio and is calibrated to 95 → 85 °F at 78 °F wet
+bulb.
+- **Water distribution:** wetting is poor below 50 % flow. The distribution
+  basin overflows above 120 %, or above 100 % with clogged nozzles.
+- **Natural draft:** with the fan off, natural draft gives 12 % airflow.
+- **Basin:** fully mixed, with a heater and a makeup float.
+- **Freezing:** the basin freezes at 32 °F with no flow. Fill icing builds
+  below 32 °F outdoor air at low water loading and melts above 34 °F.
+
+**Tanks.** Each tank is 40 nodes stacked vertically. Water moves between
+nodes by upwind advection, with a little mixing between nodes and
+overturning if a colder node sits above a warmer one. This gives a moving,
+blurring thermocline. The 10 sensors interpolate the node temperatures.
+
+**Building.**
+- **Coil banks:** each riser's coil bank is a counterflow ε-NTU coil sized
+  to its share of the peak load: entering air 78 °F, leaving 55 °F, water
+  44 → 56 °F. UA scales with airflow^0.6 and water flow^0.8, because the
+  tube-side coefficient falls at low flow.
+- **Valves:** the aggregate valve moves, with a 30 s time constant, to the
+  opening that meets the load at the riser's present DP.
+- **Return water:** passes through 30,000 gal of loop water, so the return
+  temperature responds over minutes.
+- **Load:** the load fraction is internal (0.45 occupied / 0.10 unoccupied)
+  + envelope (outdoor temperature) + ventilation (outdoor humidity) + solar.
+
+**Demo mode.** In `--demo` a simple plant sequence runs in the mock 241001
+controller:
+- lead/lag chillers, each with its own primary pump, condenser pump and tower cell
+- primary pump speed trims chiller flow to design
+- tower fans hold 75 °F condenser water supply
+- the secondary pumps hold a plant DP setpoint that the remote DPs trim
+- restart after a utility outage
+
+It is only a stand-in for the trainees' programs.

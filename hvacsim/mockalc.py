@@ -296,3 +296,147 @@ class MockController:
                         for o in self.outputs],
             "logics": [{"label": lg.label, "status": lg.status} for lg in self.logics],
         }
+
+
+class PlantDemoLogic:
+    """
+    Demo-only stand-in for a trainee's chilled water plant program (in the first plant
+    controller's mock, reading the other plant controllers' points in-process):
+      * lead/lag chillers by load, each with "its" primary pump, condenser pump and tower cell
+      * primary pump speed trims chiller flow to design, tower fan holds 75 °F CWS
+      * secondary pumps on plant DP, setpoint trimmed by the riser remote DPs
+      * tanks and tower outlet/equalizer valves open; on utility power loss everything
+        but the secondary pumps and tank valves is commanded off, then restarted in steps
+    """
+
+    def __init__(self, mock: "MockController", plant, mocks: Dict[int, "MockController"]):
+        self.mock, self.plant, self.mocks = mock, plant, mocks
+        self.label = plant.name
+        self.status = ""
+        self.targets: Dict[str, tuple] = {}
+        for f in plant.facets:
+            for c in f.commands:
+                self.targets[c.input] = (f.device_instance, objid_text(c.objid))
+        m = plant.model
+        self.ch = [c["pre"] for c in m.chillers]
+        self.pp = [x["pre"] for x in m.pumps["primary_pumps"]]
+        self.sp = [x["pre"] for x in m.pumps["secondary_pumps"]]
+        self.cp = [x["pre"] for x in m.pumps["condenser_pumps"]]
+        self.ct = [t["pre"] for t in m.towers]
+        self.tk = [k["pre"] for k in m.tanks]
+        self.br = [(b["pre"], int(b["controller_device"])) for b in m.branches]
+        self.addr: Dict[int, str] = {}
+        self.last: Dict[str, Any] = {}
+        self.last_t: Dict[str, float] = {}
+        self.n_ch, self.n_sec = 1, 2
+        self.pspd = {p: 91.7 for p in self.pp}
+        self.fspd = {t: 60.0 for t in self.ct}
+        self.sspd = 80.0
+        self.dp_sp = 20.0
+        self.load = 0.0
+        self.up = self.down = 0
+        self.restart = 0
+        self.ticks = 0
+
+    def value(self, name: str, ctl: Optional[int] = None) -> Any:
+        if ctl is not None and ctl in self.mocks:
+            return self.mocks[ctl].value(name)
+        for mk in self.mocks.values():
+            v = mk.value(name)
+            if v is not None:
+                return v
+        return None
+
+    async def _write(self, name: str, val: Any) -> None:
+        dev, obj = self.targets[name]
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        prev = self.last.get(name)
+        changed = prev is None or (val != prev if isinstance(val, bool) else abs(float(val) - float(prev)) > 0.4)
+        if not changed and now - self.last_t.get(name, 0.0) < 20.0:
+            return
+        if dev not in self.addr:
+            i_ams = await self.mock.app.who_is(dev, dev, timeout=3)
+            if not i_ams:
+                self.status = f"device {dev} not found"
+                return
+            self.addr[dev] = str(i_ams[0].pduSource)
+        pv = (BinaryPV.active if val else BinaryPV.inactive) if isinstance(val, bool) else Real(float(val))
+        try:
+            await self.mock.app.write_property(Address(self.addr[dev]), obj, "present-value", pv, priority=10)
+            self.last[name], self.last_t[name] = val, now
+        except (Exception, ErrorRejectAbortNack) as err:
+            self.status = f"write {name} failed: {describe_error(err)}"
+            self.addr.pop(dev, None)
+
+    async def tick(self) -> None:
+        v = lambda n, d=0.0: (self.value(n) if self.value(n) is not None else d)
+        self.ticks += 1
+        outs: Dict[str, Any] = {}
+        for k in self.tk:
+            outs[f"{k}_top_vlv"] = outs[f"{k}_bot_vlv"] = True
+        power = v("utility_power", True) is not False
+        if not power:
+            self.restart = 60
+        elif self.restart > 0:
+            self.restart -= 1
+        # load estimate and staging (with hysteresis)
+        flow, dt = v("schw_flow"), max(0.0, v("schwr_temp") - v("schws_temp"))
+        self.load += (flow * dt / 24.0 - self.load) * 0.05
+        cap = 1150.0
+        if self.load > 0.92 * cap * self.n_ch and self.n_ch < len(self.ch):
+            self.up += 1
+        else:
+            self.up = 0
+        if self.n_ch > 1 and self.load < 0.65 * cap * (self.n_ch - 1):
+            self.down += 1
+        else:
+            self.down = 0
+        if self.up > 120:
+            self.n_ch, self.up = self.n_ch + 1, 0
+        if self.down > 300:
+            self.n_ch, self.down = self.n_ch - 1, 0
+        plant_on = power and self.restart == 0
+        for i, c in enumerate(self.ch):
+            on = plant_on and i < self.n_ch
+            pp = self.pp[i % len(self.pp)] if self.pp else None
+            cp = self.cp[i % len(self.cp)] if self.cp else None
+            ct = self.ct[i % len(self.ct)] if self.ct else None
+            outs[f"{c}_chw_vlv"] = outs[f"{c}_cw_vlv"] = on
+            if pp:
+                if on:
+                    self.pspd[pp] = max(50.0, min(100.0, self.pspd[pp] + 0.004 * (2400.0 - v(f"{c}_chw_flow"))))
+                outs[f"{pp}_ss"], outs[f"{pp}_vfd_spd"] = on, self.pspd[pp]
+            if cp:
+                outs[f"{cp}_ss"], outs[f"{cp}_vfd_spd"] = on, 91.7
+            if ct:
+                if on:
+                    self.fspd[ct] = max(25.0, min(100.0, self.fspd[ct] + 1.0 * (v("cws_temp") - 75.0)))
+                outs[f"{ct}_inlet_vlv"] = on
+                outs[f"{ct}_fan_ss"], outs[f"{ct}_fan_vfd_spd"] = on and v("cws_temp") > 70.0, self.fspd[ct]
+                outs[f"{ct}_bypass_vlv"] = False
+            proven = on and v(f"{c}_chw_vlv_open") is True and v(f"{c}_cw_vlv_open") is True \
+                and v(f"{c}_chw_flow") > 1500 and v(f"{c}_cw_flow") > 2000
+            outs[f"{c}.rem_sp"] = 44.0
+            outs[f"{c}.rem_run"] = bool(proven)
+        for t in self.ct:
+            outs[f"{t}_outlet_vlv"] = outs[f"{t}_eq_vlv"] = True
+            outs[f"{t}_basin_htr"] = power and v(f"{t}_basin_temp", 60.0) < 40.0
+        # secondary: plant DP with remote DP trim
+        rdp = [self.value("chw_remote_dp", ctl) for _p, ctl in self.br]
+        rdp = [x for x in rdp if x is not None]
+        if rdp and self.ticks % 30 == 0:
+            self.dp_sp = max(8.0, min(30.0, self.dp_sp + 0.5 * (8.0 - min(rdp))))
+        self.sspd = max(30.0, min(100.0, self.sspd + 0.3 * (self.dp_sp - v("schw_dp"))))
+        if flow > 2700:
+            self.n_sec = 2
+        elif flow < 1800:
+            self.n_sec = 1
+        for i, p in enumerate(self.sp):
+            outs[f"{p}_ss"], outs[f"{p}_vfd_spd"] = i < self.n_sec, self.sspd
+        for name, val in outs.items():
+            if name in self.targets:
+                await self._write(name, val)
+        self.status = (f"load {self.load:.0f} t, {self.n_ch} chiller(s), plant DP {v('schw_dp'):.1f}/{self.dp_sp:.1f} psi"
+                       f", remote {min(rdp) if rdp else 0:.1f} psi, {self.n_sec} sec pump(s)"
+                       + ("" if power else " - UTILITY POWER FAILED") + (f" - restart in {self.restart}s" if power and self.restart else ""))

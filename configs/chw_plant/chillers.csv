@@ -1,0 +1,4 @@
+tag,sim_device,mac,controller_device,capacity_tons,chw_design_gpm,cw_design_gpm,chws_design_temp,kw_per_ton,min_load_pct,evap_dp_ft,cond_dp_ft,description
+CH-1,4010031,31,241001,1200,2400,3600,44,0.57,10,20,20,YORK YK VSD centrifugal
+CH-2,4010032,32,241001,1200,2400,3600,44,0.57,10,20,20,YORK YK VSD centrifugal
+CH-3,4010033,33,241001,1200,2400,3600,44,0.57,10,20,20,YORK YK VSD centrifugal

@@ -97,6 +97,14 @@ async def start_web(host, bind: str, port: int) -> web.AppRunner:
         unit.event(f"keypad {body['action']}" + (f" {body['value']}" if body.get("value") is not None else ""))
         return web.json_response({"ok": True})
 
+    @routes.post("/api/power")
+    async def power(req):
+        body = await req.json()
+        state = str(body.get("state", "fail")).lower()
+        minutes = body.get("minutes")
+        host.power(state != "fail", float(minutes) if minutes not in (None, "", 0, "0") else None)
+        return web.json_response({"ok": True, "utility_ok": host.utility_ok})
+
     @routes.post("/api/reset")
     async def reset(req):
         unit = unit_of(await req.json())

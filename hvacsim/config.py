@@ -149,6 +149,60 @@ def _number(text: str) -> Any:
             return text
 
 
+PLANT_SCHEDULES = ("chillers", "primary_pumps", "secondary_pumps", "condenser_pumps",
+                   "cooling_towers", "tanks", "branches")
+
+
+def read_csv_rows(path: Path) -> List[Dict[str, Any]]:
+    """Rows of an equipment schedule: blank cells dropped, '#' rows skipped, numbers converted."""
+    if not path.is_file():
+        raise ConfigError(f"schedule file not found: {path}")
+    rows: List[Dict[str, Any]] = []
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames or "tag" not in [c.strip() for c in reader.fieldnames]:
+            raise ConfigError(f"{path.name}: needs a header row with at least a 'tag' column")
+        for row in reader:
+            row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+            if not row.get("tag") or row["tag"].startswith("#"):
+                continue
+            rows.append({k: (_number(v) if k != "tag" else v) for k, v in row.items() if k and v != ""})
+    return rows
+
+
+def expand_plant(merged: Dict[str, Any], base_dir: Path) -> None:
+    """
+    Read a plant's equipment schedules (one CSV per equipment type) into
+    merged['plant_layout'] and list the BACnet devices the plant presents
+    (one per chiller, one I/O device per ALC controller) in merged['devices'].
+    """
+    plant = merged.get("plant") or {}
+    layout: Dict[str, Any] = {}
+    for key in PLANT_SCHEDULES:
+        ref = plant.get(key)
+        if ref is None:
+            continue
+        if isinstance(ref, list):
+            layout[key] = ref
+        else:
+            layout[key] = read_csv_rows((base_dir / str(ref)).resolve())
+        if not layout[key] and key not in ("tanks", "branches"):
+            raise ConfigError(f"{merged.get('name')}: plant.{key} has no rows")
+    if plant.get("header_sensors"):
+        layout["header_sensors"] = plant["header_sensors"]
+    merged["plant_layout"] = layout
+    devices = []
+    for c in layout.get("chillers") or []:
+        for k in ("sim_device", "mac"):
+            if k not in c:
+                raise ConfigError(f"{merged.get('name')}: chiller {c.get('tag')} needs {k} (its BACnet device)")
+        devices.append({"name": str(c["tag"]), "device_instance": int(c["sim_device"]), "mac": int(c["mac"])})
+    for ctl, d in (plant.get("io_devices") or {}).items():
+        devices.append({"name": f"{merged.get('name')}-IO-{ctl}", "device_instance": int(d["device_instance"]),
+                        "mac": int(d["mac"]), "controller": int(ctl)})
+    merged["devices"] = devices
+
+
 def resolve_instance(inst: Dict[str, Any], base_dir: Path, index: int) -> Dict[str, Any]:
     inst = dict(inst)
     merged: Dict[str, Any] = {}
@@ -162,9 +216,13 @@ def resolve_instance(inst: Dict[str, Any], base_dir: Path, index: int) -> Dict[s
             merged[key] = inst.pop(key)
     merged = _deep_merge(merged, inst)
 
-    merged.setdefault("mac", index + 1)
     if "name" not in merged:
         raise ConfigError(f"instance #{index + 1} needs a name")
+    if "plant" in merged:
+        # a plant is several BACnet devices (chillers + I/O devices), not one
+        expand_plant(merged, base_dir)
+        return merged
+    merged.setdefault("mac", index + 1)
     if "device_instance" not in merged:
         raise ConfigError(f"instance {merged['name']} needs a device_instance")
     values = {
@@ -192,18 +250,22 @@ def validate(cfg: Dict[str, Any]) -> None:
     if not insts:
         raise ConfigError("at least one instance is required")
     for inst in insts:
-        name, dev, mac = inst["name"], int(inst["device_instance"]), int(inst["mac"])
+        name = inst["name"]
         if name in seen_names:
             raise ConfigError(f"duplicate instance name {name}")
-        if dev in seen_dev:
-            raise ConfigError(f"{name}: device instance {dev} is already used on this host")
-        if not 1 <= mac <= 254:
-            raise ConfigError(f"{name}: mac must be 1-254")
-        if mac in seen_mac:
-            raise ConfigError(f"{name}: mac {mac} is already used on this host")
         seen_names.add(name)
-        seen_dev.add(dev)
-        seen_mac.add(mac)
+        devs = inst["devices"] if "plant" in inst else [
+            {"name": name, "device_instance": inst["device_instance"], "mac": inst["mac"]}]
+        for d in devs:
+            dev, mac = int(d["device_instance"]), int(d["mac"])
+            if dev in seen_dev:
+                raise ConfigError(f"{d['name']}: device instance {dev} is already used on this host")
+            if not 1 <= mac <= 254:
+                raise ConfigError(f"{d['name']}: mac must be 1-254")
+            if mac in seen_mac:
+                raise ConfigError(f"{d['name']}: mac {mac} is already used on this host")
+            seen_dev.add(dev)
+            seen_mac.add(mac)
         if "equipment" not in inst or "type" not in inst["equipment"]:
             raise ConfigError(f"{name}: equipment.type is required (usually from the template)")
         ctl = inst.get("controller") or {}

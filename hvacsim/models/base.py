@@ -110,12 +110,15 @@ class EquipmentModel:
 
     # ----- metadata helpers -------------------------------------------------
 
-    @classmethod
-    def signal_def(cls, name: str) -> SignalDef:
-        for d in list(cls.SIGNALS) + list(cls.INPUTS):
-            if d.name == name:
-                return d
-        raise KeyError(f"{cls.TYPE}: no signal or input named {name!r}")
+    def signal_def(self, name: str) -> SignalDef:
+        # instance lookup: models with CSV-defined equipment build their lists per instance
+        index = getattr(self, "_sig_index", None)
+        if index is None or len(index) != len(self.SIGNALS) + len(self.INPUTS):
+            index = {d.name: d for d in list(self.SIGNALS) + list(self.INPUTS)}
+            self._sig_index = index
+        if name in index:
+            return index[name]
+        raise KeyError(f"{self.TYPE}: no signal or input named {name!r}")
 
     # ----- runtime API ------------------------------------------------------
 

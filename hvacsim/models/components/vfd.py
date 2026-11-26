@@ -197,6 +197,7 @@ class Vfd:
         self.inp = VfdInputs()
         self.mode = "auto"                    # keypad: off / hand / auto
         self.hand_ref = 30.0                  # Hz, keypad reference in Hand
+        self.powered = True                   # mains supply present (False = utility outage)
         self.reset_state()
 
     # ------------------------------------------------------------------
@@ -311,6 +312,23 @@ class Vfd:
         p = self.p
         f_nom = p["motor_nom_freq"]
         self.warnings = []
+
+        if not self.powered:
+            # mains lost: the drive is dark, the motor coasts, relays drop out.  When power
+            # returns the drive boots and (level start) runs again if DI1 is still made.
+            s = self.shaft
+            t_load = max(0.0, load_torque(s))
+            H = max(0.1, p["inertia_h"])
+            self.shaft = max(0.0, s - (t_load + 0.01) / (2 * H * max(s, 0.05)) * h)
+            self.modulating = False
+            self.freq = 0.0
+            self.current = self.torque_pu = self.power_kw = 0.0
+            self.started = self.ready = self.at_setpoint = False
+            self.zero_speed = self.shaft < 0.01
+            self.bus_v = max(0.0, self.bus_v - self.bus_v * min(1.0, h / 2.0))
+            self.drive_temp += (p["ambient_temp"] - self.drive_temp) * min(1.0, h / 900.0)
+            self.motor_temp += (p["ambient_temp"] - self.motor_temp) * min(1.0, h / 1800.0)
+            return
 
         # --- fault reset from fieldbus (rising edge) ---
         if self.inp.efb_fault_reset and not self._last_reset_bit:
@@ -556,6 +574,8 @@ class Vfd:
         return p["motor_nom_voltage"] * max(0.04, min(1.0, self.freq / p["motor_nom_freq"]))
 
     def relay(self, source: str) -> bool:
+        if not self.powered:
+            return False                         # no control power: every relay drops out
         faulted = self.fault_code != 0
         warning = any(w[:1] == "A" and w[1:4].isalnum() for w in self.warnings)
         return {
@@ -579,6 +599,8 @@ class Vfd:
         }[source]
 
     def ao1_pct(self) -> float:
+        if not self.powered:
+            return 0.0
         p = self.p
         src = p["ao1_source"]
         if src == "output_frequency":
@@ -592,6 +614,8 @@ class Vfd:
         return max(0.0, min(100.0, v * 100.0))
 
     def status_text(self) -> str:
+        if not self.powered:
+            return "NO POWER"
         if self.fault_code and not self.override:
             return f"FAULT {self.fault_code} {FAULT_TEXT.get(self.fault_code, '')}".strip()
         if self.override:

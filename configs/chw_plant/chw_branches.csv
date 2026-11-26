@@ -1,0 +1,3 @@
+tag,controller_device,load_share_pct,design_remote_dp_psi,description
+EAST,241011,55,8,East riser (AHU-1 + aggregate load)
+WEST,241012,45,8,West riser (aggregate load)

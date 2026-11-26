@@ -58,6 +58,12 @@ class UnitSim:
         self.events.appendleft({"t": time.strftime("%H:%M:%S"), "sim": round(self.model.sim_time), "text": text})
         log.info("%s: %s", self.name, text)
 
+    def all_links(self) -> List[bacnet_io.ControllerLink]:
+        return [self.link]
+
+    def close(self) -> None:
+        self.app.close()
+
     def step(self, dt: float) -> None:
         if self.weather is not None:
             for param, signal in self.weather_params.items():
@@ -160,16 +166,57 @@ class Host:
         self.step_s = float(h.get("step", 0.1))
         self.paused = False
         self.directory = bacnet_io.NameDirectory()
+        self.sim_time = 0.0
+        self.utility_ok = True              # utility power (host wide; the plant's UPS keeps some loads)
+        self.restore_at: Optional[float] = None
 
         self.vlan_name = f"vlan{self.virtual_network}"
         bacnet_io.make_virtual_network(self.vlan_name)
         if demo:
             bacnet_io.make_virtual_network(DEMO_LAN)
         self.router = bacnet_io.build_router(h, self.vlan_name, DEMO_LAN if demo else None)
-        self.units: List[UnitSim] = [UnitSim(inst, self) for inst in cfg["instances"]]
+        self.units: List[Any] = [self._make_unit(inst) for inst in cfg["instances"]]
         self.weather = self._link_weather(h.get("weather"))
         self._link_air()
+        self._link_chw()
         self.mocks = self._build_demo_controllers() if (demo and demo_controllers) else []
+
+    def _make_unit(self, inst: Dict[str, Any]):
+        if inst["equipment"].get("type") == "chw_plant":
+            from .plant_runner import PlantSim
+            return PlantSim(inst, self)
+        return UnitSim(inst, self)
+
+    def _link_chw(self) -> None:
+        """Feed AHU cooling coils with `chw_from: <plant>` / `chw_branch: <riser tag>` from the plant."""
+        for u in self.units:
+            name = u.cfg.get("chw_from")
+            if not name:
+                continue
+            try:
+                plant = self.unit(name)
+            except KeyError:
+                log.warning("%s: chw_from %r is not on this host - using its fixed CHW supply parameters", u.name, name)
+                continue
+            if plant.model.TYPE != "chw_plant" or not hasattr(u.model, "cc"):
+                raise SystemExit(f"{u.name}: chw_from must name a chw_plant and the unit needs a cooling coil")
+            tag = str(u.cfg.get("chw_branch") or plant.model.branches[0]["tag"])
+            branch = next((b for b in plant.model.branches if b["tag"].lower() == tag.lower()), None)
+            if branch is None:
+                raise SystemExit(f"{u.name}: chw_branch {tag!r} is not a riser of {name} "
+                                 f"({[b['tag'] for b in plant.model.branches]})")
+            plant.model.ahus.append({"model": u.model, "branch": branch, "name": u.name})
+            u.chw_plant = plant
+
+    def power(self, ok: bool, minutes: Optional[float] = None) -> None:
+        """Utility power fail / restore for the whole host (optional automatic restore)."""
+        self.utility_ok = bool(ok)
+        self.restore_at = self.sim_time + minutes * 60.0 if (not ok and minutes) else None
+        for u in self.units:
+            if hasattr(u.model, "set_utility"):
+                u.model.set_utility(self.utility_ok)
+                u.event("UTILITY POWER " + ("RESTORED" if ok else "FAILED")
+                        + (f" (restores in {minutes:g} min)" if (not ok and minutes) else ""))
 
     def unit(self, name: Optional[str]) -> UnitSim:
         if not name:
@@ -214,22 +261,36 @@ class Host:
             ahu.model.boxes.append(u.model)
             u.served_by = ahu
         # step order: weather station, then air handlers, then what they serve
-        rank = {"weather_station": 0, "ahu_vav_econ": 1}
+        rank = {"weather_station": 0, "ahu_vav_econ": 1, "chw_plant": 3}
         self.units.sort(key=lambda u: rank.get(u.model.TYPE, 2))
 
     def _build_demo_controllers(self):
         from .mockalc import AhuDemoLogic, MockController, Thermostat, VavDemoLogic
 
         mocks: Dict[int, MockController] = {}
+
+        def mock_for(dev: int) -> MockController:
+            if dev not in mocks:
+                port = bacnet_io.virtual_port(1, DEMO_LAN, self.ip_network, 0x10 + len(mocks))
+                mocks[dev] = MockController(dev, port, name=f"ALC-DEMO-{dev}")
+            return mocks[dev]
+
         for unit in self.units:
+            if unit.model.TYPE == "chw_plant":
+                from .mockalc import PlantDemoLogic
+                for link in unit.all_links():
+                    mock = mock_for(link.device_instance)
+                    for pt in link.points:
+                        mock.add_point(pt.object_name, pt.demo_object, unit.model.signal_def(pt.signal).units)
+                if (unit.cfg.get("plant") or {}).get("demo_logic", True) and unit.links:
+                    first = mock_for(next(iter(unit.links)))
+                    first.logics.append(PlantDemoLogic(first, unit, mocks))
+                continue
             demo_cfg = unit.cfg.get("demo") or {}
             if not unit.link.points and not demo_cfg.get("writes") and not demo_cfg.get("logic"):
                 continue   # nothing for a demo controller to do (e.g. the weather station)
             dev = unit.link.device_instance or 240000 + int(unit.cfg["mac"])
-            if dev not in mocks:
-                port = bacnet_io.virtual_port(1, DEMO_LAN, self.ip_network, 0x10 + len(mocks))
-                mocks[dev] = MockController(dev, port, name=f"ALC-DEMO-{dev}")
-            mock = mocks[dev]
+            mock = mock_for(dev)
             zone_name = None
             for pt in unit.link.points:
                 name = pt.object_name or f"{unit.name}_{pt.signal}"
@@ -263,7 +324,7 @@ class Host:
     async def run(self) -> None:
         await asyncio.sleep(0.2)
         await self.announce()
-        tasks = [asyncio.create_task(u.link.run()) for u in self.units]
+        tasks = [asyncio.create_task(link.run()) for u in self.units for link in u.all_links()]
         tasks += [asyncio.create_task(m.run()) for m in self.mocks]
         last = time.monotonic()
         try:
@@ -272,15 +333,21 @@ class Host:
                 now = time.monotonic()
                 dt = 0.0 if self.paused else (now - last) * self.speed
                 last = now
-                for u in self.units:
-                    u.step(dt)
+                self.step(dt)
         finally:
             for t in tasks:
                 t.cancel()
 
+    def step(self, dt: float) -> None:
+        self.sim_time += dt
+        if self.restore_at is not None and self.sim_time >= self.restore_at:
+            self.power(True)
+        for u in self.units:
+            u.step(dt)
+
     def close(self) -> None:
         for u in self.units:
-            u.app.close()
+            u.close()
         for m in self.mocks:
             m.app.close()
         self.router.close()
@@ -300,6 +367,8 @@ class Host:
             "paused": self.paused,
             "demo": self.demo,
             "weather": self.weather.name if self.weather else None,
+            "utility_ok": self.utility_ok,
+            "restore_in": round(self.restore_at - self.sim_time) if self.restore_at is not None else None,
             "units": [u.summary() for u in self.units],
             "demo_controllers": [m.snapshot() for m in self.mocks],
         }
@@ -315,7 +384,7 @@ def apply_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, 
         cfg.setdefault("web", {})["port"] = args.web_port
     for item in args.controller or []:
         name, _, dev = item.partition("=")
-        matches = [i for i in cfg["instances"] if i["name"] == name]
+        matches = [i for i in cfg["instances"] if i["name"] == name and "plant" not in i]
         if not matches or not dev.isdigit():
             raise SystemExit(f"--controller expects NAME=DEVICE_ID with a known instance name, got {item!r}")
         matches[0]["controller"]["device_instance"] = int(dev)
@@ -335,8 +404,12 @@ async def amain(args: argparse.Namespace) -> None:
              "demo network" if args.demo else cfg["host"]["address"],
              host.ip_network, host.virtual_network, len(host.units), port)
     for u in host.units:
-        u.event(f"started as device {u.cfg['device_instance']} at {u.address}; "
-                f"writing to controller {u.link.device_instance}")
+        if hasattr(u, "facets"):
+            u.event(f"started as devices {u.summary()['device_instance']}; writing to controllers "
+                    + ", ".join(str(c) for c in u.links))
+        else:
+            u.event(f"started as device {u.cfg['device_instance']} at {u.address}; "
+                    f"writing to controller {u.link.device_instance}")
     try:
         await host.run()
     finally:

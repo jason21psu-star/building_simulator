@@ -1,6 +1,7 @@
 """Equipment model registry.  Add new equipment types here."""
 
 from .ahu import Ahu
+from .chw_plant import ChwPlant
 from .base import EquipmentModel, FaultDef, SignalDef
 from .unit_heater import HotWaterUnitHeater
 from .vav import VavReheat
@@ -13,6 +14,7 @@ MODELS = {
     WeatherStation.TYPE: WeatherStation,
     Ahu.TYPE: Ahu,
     VavReheat.TYPE: VavReheat,
+    ChwPlant.TYPE: ChwPlant,
 }
 
 __all__ = ["EquipmentModel", "FaultDef", "SignalDef", "MODELS"]

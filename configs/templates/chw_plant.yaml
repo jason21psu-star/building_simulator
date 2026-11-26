@@ -1,0 +1,44 @@
+# ===========================================================================
+#  Template: chilled water plant (docs/CHILLER_PLANT_DESIGN.md)
+# ===========================================================================
+#  The equipment comes from CSV schedules (plant: section of the host config),
+#  one file per equipment type.  Point names are generated from each row's
+#  tag (PCHWP-2 -> pchwp2_ss, pchwp2_vfd_spd, pchwp2_amps ...) and belong to
+#  the ALC controller in the row's controller_device column.
+#
+#  BACnet devices the plant presents on the virtual network:
+#    one per chiller (sim_device / mac columns): YORK YK OptiView BAS objects
+#    one I/O device per ALC controller (plant.io_devices): the BO/AO objects
+#      the controller's network outputs write ("the field wiring")
+#  Sensor values are written into the controllers' out-of-service inputs by
+#  object name.
+# ===========================================================================
+
+model_name: Chilled water plant (simulated)
+description: VSD chillers, cooling towers, headered pumps, TES decoupler
+
+equipment:
+  type: chw_plant
+  params:
+    peak_tons: 2400.0
+    chws_design_temp: 44.0
+    chwr_design_temp: 56.0
+    main_loss_psi: 15.0
+    design_speed_hz: 55.0          # balancer speed for design flow
+    occ_days: mon-fri
+    occ_start: 6.0
+    occ_end: 18.0
+    initial_tank_charge: 80.0
+
+plant:
+  # which ALC controller gets each plant header sensor (defaults shown)
+  header_sensors:
+    241001: [pchws_temp, pchwr_temp, pchw_flow, cws_temp, cwr_temp, utility_power]
+    241002: [schws_temp, schwr_temp, schw_flow, schw_dp]
+    241004: [dcplr_flow, tes_cold_temp, tes_warm_temp]
+  # how the simulator writes into the controllers
+  writes:
+    min_interval: 1.0
+    analog: {deadband: 0.1, heartbeat: 30}
+    binary: {heartbeat: 30}
+  demo_logic: true                 # --demo: run a simple plant sequence in the mock controllers
