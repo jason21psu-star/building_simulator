@@ -35,7 +35,7 @@ from .components.hydronic import (
     FT_PER_PSI, IsoValve, Pump, StratifiedTank, bisect, parallel_r, pumps_flow, root, solve_pumps, valve_r,
 )
 from .components.tower import TowerCell
-from .components.vfd import VFD_DEFAULTS, VFD_PARAM_INFO, Vfd
+from .components.drives import build_drive, drive_class, motor_for_hp
 from .components.york_yk import YK_FAULTS, YK_OBJECTS, YorkYK
 
 _A = "analog"
@@ -48,11 +48,14 @@ EQUIPMENT_DEFAULTS = {
     "chillers": {"capacity_tons": 1200.0, "chw_design_gpm": 2400.0, "cw_design_gpm": 3600.0,
                  "chws_design_temp": 44.0, "kw_per_ton": 0.57, "min_load_pct": 10.0,
                  "evap_dp_ft": 20.0, "cond_dp_ft": 20.0},
-    "primary_pumps": {"design_gpm": 2400.0, "design_head_ft": 60.0, "motor_hp": 50.0, "ct_range_amps": 100.0},
-    "secondary_pumps": {"design_gpm": 2400.0, "design_head_ft": 100.0, "motor_hp": 75.0, "ct_range_amps": 150.0},
-    "condenser_pumps": {"design_gpm": 3600.0, "design_head_ft": 80.0, "motor_hp": 100.0, "ct_range_amps": 200.0},
+    "primary_pumps": {"design_gpm": 2400.0, "design_head_ft": 60.0, "motor_hp": 50.0, "ct_range_amps": 100.0,
+                      "drive_model": "ach580"},
+    "secondary_pumps": {"design_gpm": 2400.0, "design_head_ft": 100.0, "motor_hp": 75.0, "ct_range_amps": 150.0,
+                        "drive_model": "ach580"},
+    "condenser_pumps": {"design_gpm": 3600.0, "design_head_ft": 80.0, "motor_hp": 100.0, "ct_range_amps": 200.0,
+                        "drive_model": "ach580"},
     "cooling_towers": {"design_gpm": 3600.0, "range_f": 10.0, "approach_f": 7.0, "design_wb": 78.0,
-                       "fan_hp": 60.0, "ct_range_amps": 100.0, "basin_gal": 6500.0},
+                       "fan_hp": 60.0, "ct_range_amps": 100.0, "basin_gal": 6500.0, "drive_model": "ach580"},
     "tanks": {"volume_gal": 120000.0, "height_ft": 40.0, "sensor_count": 10},
     "branches": {"load_share_pct": 50.0, "design_remote_dp_psi": 8.0},
 }
@@ -88,16 +91,9 @@ HEADER_SENSORS = {
 PUMP_GROUPS = {"primary_pumps": "Primary CHW pump", "secondary_pumps": "Secondary CHW pump",
                "condenser_pumps": "Condenser water pump"}
 
-DRIVE_BASE = {
-    "ext1_commands": "in1_start",
-    "ext1_freq_ref1": "ai1_scaled",
-    "start_interlock_1": "di4",
-    "start_interlock_stop_mode": "coast",
-    "ro1_source": "ready_run",
-    "min_freq": 15.0,
-    "accel_time_1": 30.0,
-    "decel_time_1": 30.0,
-}
+# every plant drive is hardwired (drive "hardwired" preset); drive-neutral settings, each drive
+# translates them into its own parameters.  CSV column drive_model picks the make / model.
+DRIVE_COMMON = {"min_hz": 15.0, "accel_s": 30.0, "decel_s": 30.0}
 DRIVE_FAULTS = {"overcurrent_trip": "Drive overcurrent trip", "cooling_fan_failed": "Drive cooling fan failed"}
 VALVE_FAULTS = {
     "failed": ("actuator failed", "bool", None, ""),
@@ -268,7 +264,7 @@ class ChwPlant(EquipmentModel):
                 faults.append(FaultDef(f"{pre}_bearing", f"{tag}: bearing / seal failure (overload)", tag))
                 for k, txt in DRIVE_FAULTS.items():
                     faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
-                self._drive_info(info, pre, tag)
+                self._drive_info(info, pre, tag, r["drive_model"])
                 actions += [f"{pre}.{k}" for k in ("hand", "off", "auto", "reset", "hand_ref")]
 
         # cooling towers
@@ -305,7 +301,7 @@ class ChwPlant(EquipmentModel):
                     ("basin_sensor_failed", "basin temp sensor failed", "number", 140.0, "°F"),
                     ("overcurrent_trip", "fan drive overcurrent trip", "bool", None, "")):
                 faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag, kind, dflt, units))
-            self._drive_info(info, pre, f"{tag} fan")
+            self._drive_info(info, pre, f"{tag} fan", t["drive_model"])
             actions += [f"{pre}.{k}" for k in ("hand", "off", "auto", "reset", "hand_ref", "vib_reset")]
 
         # tanks
@@ -416,9 +412,10 @@ class ChwPlant(EquipmentModel):
         return {c["tag"]: self.signals[f"{c['pre']}.status"].split(" · ")[0] for c in self.chillers}
 
     @staticmethod
-    def _drive_info(info: Dict[str, ParamInfo], pre: str, tag: str) -> None:
-        for k, i in VFD_PARAM_INFO.items():
-            info[f"{pre}.{k}"] = ParamInfo(i.id, i.label, f"{tag} drive (ACH580)", i.units, i.choices, i.minimum, i.maximum)
+    def _drive_info(info: Dict[str, ParamInfo], pre: str, tag: str, model: str = "ach580") -> None:
+        cls = drive_class(model)
+        for k, i in cls.PARAM_INFO.items():
+            info[f"{pre}.{k}"] = ParamInfo(i.id, i.label, f"{tag} drive ({cls.SHORT})", i.units, i.choices, i.minimum, i.maximum)
 
     # ------------------------------------------------------------------ state
 
@@ -442,7 +439,7 @@ class ChwPlant(EquipmentModel):
             for r in R[g]:
                 pump = Pump(float(r["design_gpm"]), float(r["design_head_ft"]), float(r["motor_hp"]),
                             branch_r=10.0 / float(r["design_gpm"]) ** 2)
-                self._make_drive(r["pre"], float(r["motor_hp"]), 1.2, p[group_drive[g]])
+                self._make_drive(r["pre"], float(r["motor_hp"]), 1.2, p[group_drive[g]], r["drive_model"])
                 self.pumps[g].append({**r, "pump": pump})
         # chillers and their branches
         self.chillers: List[Dict[str, Any]] = []
@@ -474,7 +471,7 @@ class ChwPlant(EquipmentModel):
         for t in R["cooling_towers"]:
             cell = TowerCell(float(t["design_gpm"]), float(t["range_f"]), float(t["approach_f"]),
                              float(t["design_wb"]), float(t["basin_gal"]), basin_t=p["initial_basin_temp"])
-            self._make_drive(t["pre"], float(t["fan_hp"]), 8.0, p["ct_fan_drive"])
+            self._make_drive(t["pre"], float(t["fan_hp"]), 8.0, p["ct_fan_drive"], t["drive_model"])
             qd = float(t["design_gpm"])
             self.towers.append({**t, "cell": cell, "vin": IsoValve(60.0), "vout": IsoValve(60.0),
                                 "vbp": IsoValve(60.0, fail_closed=True), "veq": IsoValve(60.0),
@@ -530,19 +527,22 @@ class ChwPlant(EquipmentModel):
         self._occ = False
         self._t0 = t0
 
-    def _make_drive(self, pre: str, hp: float, inertia: float, overrides: Dict[str, Any]) -> None:
-        dp = dict(VFD_DEFAULTS)
-        dp.update(DRIVE_BASE)
-        amps = round(1.28 * hp + 1.0, 0)
-        dp.update({"motor_nom_current": amps, "motor_nom_power": round(hp * 0.746, 1),
-                   "max_current": round(1.4 * amps, 0), "inertia_h": inertia})
-        dp.update(overrides or {})
-        for k in list(dp):
-            if k in VFD_DEFAULTS:
-                dp[k] = coerce(dp[k], VFD_DEFAULTS[k])
-        self.drive_p[pre] = dp
+    def _make_drive(self, pre: str, hp: float, inertia: float, overrides: Dict[str, Any],
+                    model: str = "ach580") -> None:
+        """
+        A hardwired plant drive.  overrides: the group's drive parameters, either flat (in the
+        drive's own parameter names) or per model, e.g. {"ach580": {...}, "z1000": {...}}.
+        """
+        model = str(model or "ach580").lower()
+        ov = overrides or {}
+        if model in ov and isinstance(ov[model], dict):
+            ov = ov[model]
+        elif any(isinstance(v, dict) for v in ov.values()):
+            ov = {}                                  # per-model overrides, none for this model
         self.inject[pre] = set()
-        self.drives[pre] = Vfd(dp, self.inject[pre])
+        v = build_drive(model, {**DRIVE_COMMON, **motor_for_hp(hp, inertia)}, "hardwired", ov, self.inject[pre])
+        self.drive_p[pre] = v.p
+        self.drives[pre] = v
 
     @staticmethod
     def _eps(ntu: float, cr: float) -> float:
@@ -580,16 +580,8 @@ class ChwPlant(EquipmentModel):
     def set_param(self, name: str, value: Any) -> None:
         if "." in name:
             pre, k = name.split(".", 1)
-            if pre in self.drive_p and k in VFD_DEFAULTS:
-                value = coerce(value, VFD_DEFAULTS[k])
-                info = VFD_PARAM_INFO.get(k)
-                if info and info.choices and value not in info.choices:
-                    raise ValueError(f"{name}: {value!r} is not one of {info.choices}")
-                if info and info.minimum is not None and value < info.minimum:
-                    raise ValueError(f"{name}: minimum is {info.minimum}")
-                if info and info.maximum is not None and value > info.maximum:
-                    raise ValueError(f"{name}: maximum is {info.maximum}")
-                self.drive_p[pre][k] = value
+            if pre in self.drive_p and k in type(self.drives[pre]).DEFAULTS:
+                self.drive_p[pre][k] = type(self.drives[pre]).check_param(k, value)
                 return
             ch = self._chiller(pre)
             if ch and k == "local_sp":
@@ -857,8 +849,7 @@ class ChwPlant(EquipmentModel):
                 pre, pump = x["pre"], x["pump"]
                 v = self.drives[pre]
                 v.powered = util or on_ups
-                v.inp.di = [bool(self.inputs[f"{pre}_ss"]), False, False, True, False, False]
-                v.inp.ai1_pct = float(self.inputs[f"{pre}_vfd_spd"])
+                v.wire(start=bool(self.inputs[f"{pre}_ss"]), safeties=True, speed_ref=float(self.inputs[f"{pre}_vfd_spd"]))
                 bearing = 1.25 if self.fault(f"{pre}_bearing") else 1.0
                 v.step(h, lambda s, pump=pump, b=bearing: pump.load_torque_pu(s) * b)
                 pump.wear = 0.82 if self.fault(f"{pre}_worn_impeller") else 1.0
@@ -869,8 +860,8 @@ class ChwPlant(EquipmentModel):
             if self.fault(f"{pre}_vibration") and v.speed_pu > 0.2:
                 t["vib"] = True
             v.powered = util
-            v.inp.di = [bool(self.inputs[f"{pre}_fan_ss"]), False, False, not t["vib"], False, False]
-            v.inp.ai1_pct = float(self.inputs[f"{pre}_fan_vfd_spd"])
+            v.wire(start=bool(self.inputs[f"{pre}_fan_ss"]), safeties=not t["vib"],     # vibration switch in the safeties
+                   speed_ref=float(self.inputs[f"{pre}_fan_vfd_spd"]))
             ice = t["cell"].ice
             v.step(h, lambda s, ice=ice: 0.03 + 0.9 * s * s * (1.0 + 0.3 * ice))
 
@@ -1156,13 +1147,12 @@ class ChwPlant(EquipmentModel):
     def _publish_drive(self, pre: str, ct_range: float, sub: str) -> None:
         s = self.signals
         v = self.drives[pre]
-        dp = self.drive_p[pre]
         amps = v.current + (self._noise(0.1) if v.modulating else 0.0)
         s[f"{pre}_{sub}amps"] = round(min(ct_range, max(0.0, amps)), 2)
-        s[f"{pre}_{sub}vfd_fb"] = round(v.ao1_pct(), 1)
-        s[f"{pre}_{sub}vfd_flt"] = v.relay(dp["ro3_source"])
+        s[f"{pre}_{sub}vfd_fb"] = round(v.role_out("speed_fb"), 1)
+        s[f"{pre}_{sub}vfd_flt"] = v.role_out("fault_out")
         s[f"{pre}.freq"] = round(v.freq, 1)
-        s[f"{pre}.status"] = f"{v.mode}|{v.status_text()}|{v.freq:.1f}|{v.current:.1f}|{'; '.join(v.warnings)}|{v.hand_ref:.0f}"
+        s[f"{pre}.status"] = v.status_line()
         if f"{pre}.kw" in s:
             s[f"{pre}.kw"] = round(max(0.0, v.power_kw), 1)
 

@@ -9,10 +9,12 @@ Air path:
   EA dmpr(NC) ─── return plenum ─ RF ─ RA smoke/CO2/RH/RAT ─ zones
 
 Every hardware point the ALC controller sees is a model input (commands) or
-signal (sensor values written into the controller).  The five drives are
-ACH580-style Vfd components wired hardwired: BO -> DI1, AO -> AI1 (0-10 V),
-safety chain -> DI4 (20.41 start interlock 1), RO3 -> fault BI, AO1 ->
-feedback AI, CT on the motor leads -> amps AI.
+signal (sensor values written into the controller).  The five drives sit
+behind the drive interface (components/drives: ACH580 by default, or set
+fan_drive_model) and are wired by role: BO -> start, AO 0-10 V -> speed,
+safety chain -> safeties input (ACH580 DI4 start interlock 1, Z1000 S3
+Customer Safeties), fault relay -> fault BI, analog output -> feedback AI,
+CT on the motor leads -> amps AI.
 
 Contact convention for safety BIs written to the controller: True = contact
 closed = NORMAL (fail-safe: an open circuit reads as an alarm).  Drive fault
@@ -31,7 +33,7 @@ from .components.airside import (
     AIR_LB_PER_CFM_H, SENSIBLE, Actuator, SteamHumidifier, WaterCoil, damper_fraction,
     equal_percentage, signal_2_10, ssq, ssqrt,
 )
-from .components.vfd import FAULT_TEXT, VFD_DEFAULTS, VFD_PARAM_INFO, Vfd
+from .components.drives import build_drive, drive_class, param_items as drive_param_items
 
 SF = ["sf1", "sf2", "sf3", "sf4"]
 DRIVES = SF + ["rf"]
@@ -43,19 +45,11 @@ DRIVE_FAULTS = {
     "bearing_worn": "Worn fan bearings",
 }
 
-# hardwired ACH580 settings for every AHU drive (on top of the manual defaults)
-DRIVE_BASE = {
-    "ext1_commands": "in1_start",
-    "ext1_freq_ref1": "ai1_scaled",
-    "start_interlock_1": "di4",
-    "start_interlock_stop_mode": "coast",
-    "ro1_source": "ready_run",
-    "min_freq": 12.0,
-    "accel_time_1": 30.0,
-    "decel_time_1": 30.0,
-}
-SF_DRIVE = {"motor_nom_current": 14.0, "motor_nom_power": 7.5, "max_current": 19.6, "inertia_h": 5.0}
-RF_DRIVE = {"motor_nom_current": 21.0, "motor_nom_power": 11.2, "max_current": 29.4, "inertia_h": 6.0}
+# every AHU drive is hardwired (BO -> start, AO 0-10 V -> speed, safety chain -> safeties input);
+# drive-neutral settings, translated by each drive into its own parameters
+DRIVE_COMMON = {"min_hz": 12.0, "accel_s": 30.0, "decel_s": 30.0}
+SF_DRIVE = {"motor_amps": 14.0, "motor_kw": 7.5, "max_amps": 19.6, "inertia_h": 5.0}
+RF_DRIVE = {"motor_amps": 21.0, "motor_kw": 11.2, "max_amps": 29.4, "inertia_h": 6.0}
 
 _A = "analog"
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -101,7 +95,8 @@ class Ahu(EquipmentModel):
         "initial_zone_temp": 72.0,
         "clock_start": "",             # "YYYY-mm-dd HH:MM" sim clock start; blank = host local time
         "sensor_noise": 0.05,
-        # drive parameter overrides (dicts of ACH580 parameters)
+        # drives: make / model ("ach580", "z1000") and parameter overrides in that drive's own names
+        "fan_drive_model": "ach580",
         "sf_drive": {},
         "rf_drive": {},
     }
@@ -267,18 +262,13 @@ class Ahu(EquipmentModel):
         p = self.p
         self.drive_p: Dict[str, Dict[str, Any]] = {}
         self.inject: Dict[str, set] = {}
-        self.drives: Dict[str, Vfd] = {}
+        self.drives: Dict[str, Any] = {}
         for d in DRIVES:
-            dp = dict(VFD_DEFAULTS)
-            dp.update(DRIVE_BASE)
-            dp.update(RF_DRIVE if d == "rf" else SF_DRIVE)
-            dp.update(p["rf_drive"] if d == "rf" else p["sf_drive"])
-            for k in list(dp):
-                if k in VFD_DEFAULTS:
-                    dp[k] = coerce(dp[k], VFD_DEFAULTS[k])
-            self.drive_p[d] = dp
             self.inject[d] = set()
-            self.drives[d] = Vfd(dp, self.inject[d])
+            v = build_drive(p["fan_drive_model"], {**DRIVE_COMMON, **(RF_DRIVE if d == "rf" else SF_DRIVE)},
+                            "hardwired", p["rf_drive"] if d == "rf" else p["sf_drive"], self.inject[d])
+            self.drive_p[d] = v.p
+            self.drives[d] = v
         self.act = {
             "oa": Actuator(150.0, 0.0), "ra": Actuator(150.0, 0.0), "ea": Actuator(150.0, 0.0),
             "ph": Actuator(90.0, 1.0),       # preheat valve fails OPEN
@@ -333,33 +323,25 @@ class Ahu(EquipmentModel):
     def param_items(self) -> List[tuple]:
         items = super().param_items()
         for d in DRIVES:
-            for k, info in VFD_PARAM_INFO.items():
-                items.append((f"{d}.{k}", ParamInfo(info.id, info.label, f"{DRIVE_LABEL[d]} drive (ACH580)",
-                                                     info.units, info.choices, info.minimum, info.maximum),
-                              self.drive_p[d][k]))
+            items += drive_param_items(d, DRIVE_LABEL[d], self.drives[d])
         return items
 
     def param_label(self, name: str) -> str:
         if "." in name:
             d, k = name.split(".", 1)
-            info = VFD_PARAM_INFO.get(k)
+            info = type(self.drives[d]).PARAM_INFO.get(k) if d in self.drives else None
             return f"{DRIVE_LABEL.get(d, d)} {info.id} {info.label}" if info else name
         return super().param_label(name)
 
     def set_param(self, name: str, value: Any) -> None:
         if "." in name:
             d, k = name.split(".", 1)
-            if d not in self.drive_p or k not in VFD_DEFAULTS:
+            if d not in self.drives:
                 raise KeyError(f"no drive parameter {name!r}")
-            value = coerce(value, VFD_DEFAULTS[k])
-            info = VFD_PARAM_INFO.get(k)
-            if info and info.choices and value not in info.choices:
-                raise ValueError(f"{name}: {value!r} is not one of {info.choices}")
-            if info and info.minimum is not None and value < info.minimum:
-                raise ValueError(f"{name}: minimum is {info.minimum}")
-            if info and info.maximum is not None and value > info.maximum:
-                raise ValueError(f"{name}: maximum is {info.maximum}")
-            self.drive_p[d][k] = value
+            try:
+                self.drive_p[d][k] = type(self.drives[d]).check_param(k, value)
+            except KeyError:
+                raise KeyError(f"no drive parameter {name!r}")
             return
         super().set_param(name, value)
 
@@ -594,8 +576,7 @@ class Ahu(EquipmentModel):
         for d in DRIVES:
             v = self.drives[d]
             v.powered = self.power_ok                     # ATS power (generator plant)
-            v.inp.di = [bool(self.inputs[f"{d}_ss"]), False, False, chain, False, False]
-            v.inp.ai1_pct = float(self.inputs[f"{d}_vfd_spd"])
+            v.wire(start=bool(self.inputs[f"{d}_ss"]), safeties=chain, speed_ref=float(self.inputs[f"{d}_vfd_spd"]))
             v.step(h, load_fn(d))
 
         # ---------------- actuators ----------------
@@ -757,10 +738,10 @@ class Ahu(EquipmentModel):
         for d in DRIVES:
             v = self.drives[d]
             s[f"{d}_amps"] = round(min(30.0, max(0.0, v.current + (self._noise(0.04) if v.modulating else 0.0))), 2)
-            s[f"{d}_vfd_fb"] = round(v.ao1_pct(), 1)
-            s[f"{d}_vfd_flt"] = v.relay(self.drive_p[d]["ro3_source"])
+            s[f"{d}_vfd_fb"] = round(v.role_out("speed_fb"), 1)
+            s[f"{d}_vfd_flt"] = v.role_out("fault_out")
             s[f"{d}_freq"] = round(v.freq, 1)
-            drives_txt.append(f"{d}|{v.mode}|{v.status_text()}|{v.freq:.1f}|{v.current:.1f}|{'; '.join(v.warnings)}|{v.hand_ref:.0f}")
+            drives_txt.append(f"{d}|{v.status_line()}")
         s["drives"] = "\n".join(drives_txt)
         s["frz_stat"] = not (self.frz_latched or self.fault("frz_trip"))
         s["hi_static"] = not self.hs_latched
@@ -838,6 +819,5 @@ class Ahu(EquipmentModel):
         s["hc_frozen"] = self.hc.frozen or self.hc.damaged
         s["sim_clock"] = self.clock().strftime("%a %Y-%m-%d %H:%M")
 
-    @staticmethod
-    def fault_text(code: int) -> str:
-        return FAULT_TEXT.get(int(code), "")
+    def fault_text(self, code) -> str:
+        return getattr(type(self.drives["sf1"]), "FAULT_TEXT", {}).get(code, "")

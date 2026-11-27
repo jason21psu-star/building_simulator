@@ -32,8 +32,10 @@ _PSI = "poundsForcePerSquareInch"
 
 EQUIPMENT_DEFAULTS = {
     "boilers": {"input_mbh": 4000.0, "design_gpm": 400.0, "min_flow_gpm": 120.0, "turndown": 25.0, "hx_dp_ft": 15.0},
-    "primary_pumps": {"design_gpm": 400.0, "design_head_ft": 40.0, "motor_hp": 7.5, "ct_range_amps": 20.0, "boiler": ""},
-    "secondary_pumps": {"design_gpm": 600.0, "design_head_ft": 80.0, "motor_hp": 20.0, "ct_range_amps": 50.0},
+    "primary_pumps": {"design_gpm": 400.0, "design_head_ft": 40.0, "motor_hp": 7.5, "ct_range_amps": 20.0, "boiler": "",
+                      "drive_model": "ach580"},
+    "secondary_pumps": {"design_gpm": 600.0, "design_head_ft": 80.0, "motor_hp": 20.0, "ct_range_amps": 50.0,
+                        "drive_model": "ach580"},
     "branches": {"load_share_pct": 50.0, "design_remote_dp_psi": 6.0, "eob_bypass_pct": 5.0},
 }
 
@@ -237,7 +239,7 @@ class HwPlant(EquipmentModel):
                 truth(f"{pre}.status", kind="text", desc=f"{tag} drive", default="")
                 for k, txt in {**PUMP_FAULTS, **DRIVE_FAULTS}.items():
                     faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
-                ChwPlant._drive_info(info, pre, tag)
+                ChwPlant._drive_info(info, pre, tag, r["drive_model"])
                 actions += [f"{pre}.{k}" for k in ("hand", "off", "auto", "reset", "hand_ref")]
 
         # boiler room: louver
@@ -367,7 +369,7 @@ class HwPlant(EquipmentModel):
                     pump = Pump(qd, hd, float(r["motor_hp"]), branch_r=br)
                 else:
                     pump = Pump(qd, hd, float(r["motor_hp"]), branch_r=10.0 / qd ** 2)
-                self._make_drive(r["pre"], float(r["motor_hp"]), 1.0, p[group_drive[g]])
+                self._make_drive(r["pre"], float(r["motor_hp"]), 1.0, p[group_drive[g]], r["drive_model"])
                 self.pumps[g].append({**r, "pump": pump})
         # boilers (each with its pump)
         self.boilers: List[Dict[str, Any]] = []
@@ -632,8 +634,7 @@ class HwPlant(EquipmentModel):
                 pre, pump = x["pre"], x["pump"]
                 v = self.drives[pre]
                 v.powered = util
-                v.inp.di = [bool(self.inputs[f"{pre}_ss"]), False, False, True, False, False]
-                v.inp.ai1_pct = float(self.inputs[f"{pre}_vfd_spd"])
+                v.wire(start=bool(self.inputs[f"{pre}_ss"]), safeties=True, speed_ref=float(self.inputs[f"{pre}_vfd_spd"]))
                 if self.fault(f"{pre}_seized"):
                     v.step(h, lambda s: 3.0)                 # locked rotor: the drive stalls and trips
                 else:
