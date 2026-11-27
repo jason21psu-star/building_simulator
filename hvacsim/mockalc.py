@@ -205,10 +205,11 @@ class MockController:
         self._next_av += 1
         self.thermostats.append(t)
 
-    def add_network_output(self, device: int, objid: str, value: Any, priority: int = 10, label: str = "") -> None:
-        """A fixed network output to a simulator (demo): rewritten every 10 s."""
+    def add_network_output(self, device: int, objid: str, value: Any, priority: int = 10, label: str = "",
+                           every: int = 10) -> None:
+        """A fixed network output to a simulator (demo): rewritten every `every` s (default 10)."""
         self.outputs.append({"device": device, "object": objid, "value": value, "priority": priority,
-                             "label": label, "address": None, "status": ""})
+                             "label": label, "address": None, "status": "", "every": max(1, int(every))})
 
     def value(self, object_name: str) -> Any:
         obj = self.app.objectName.get(object_name)
@@ -229,8 +230,10 @@ class MockController:
         t.status = f"simulator device {t.target_device} not found"
         return False
 
-    async def _network_outputs(self) -> None:
+    async def _network_outputs(self, tick: int = 0) -> None:
         for o in self.outputs:
+            if tick % o.get("every", 10):
+                continue
             try:
                 if o["address"] is None:
                     i_ams = await self.app.who_is(o["device"], o["device"], timeout=3)
@@ -252,8 +255,8 @@ class MockController:
         tick = 0
         while True:
             await asyncio.sleep(1.0)
-            if self.outputs and tick % 10 == 0:
-                await self._network_outputs()
+            if self.outputs:
+                await self._network_outputs(tick)
             for logic in self.logics:
                 await logic.tick()
             tick += 1

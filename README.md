@@ -25,6 +25,8 @@ that network, the same way MS/TP devices sit behind a router:
            ├── VAV-1…6   device 4010101-106  address 5001:101-106  AO-1 dmpr_1, AO-2 rh_vlv_1; to ALC 240901-240906
            ├── SF-1-VFD  device 4010011  address 5001:11  ACH580 object list (fieldbus)
            ├── SF-2-VFD  device 4010012  address 5001:12  DI1/AI1 terminals (hardwired)
+           ├── SF-3-VFD  device 4010013  address 5001:13  Yaskawa Z1000, S1/A1 terminals (hardwired)
+           ├── SF-4-VFD  device 4010014  address 5001:14  Yaskawa Z1000 BACnet objects (fieldbus)
            ├── CH-1…3    device 4010031-033  address 5001:31-33  YORK YK OptiView BAS objects (Mode B)
            ├── CHP-1 I/O device 4010041-044  address 5001:41-44  plant BO/AO terminals for ALC 241001-241004
            ├── B-1…3     device 4010051-053  address 5001:51-53  Lochinvar Crest BMS objects (Mode B)
@@ -56,7 +58,7 @@ that network, the same way MS/TP devices sit behind a router:
 | `chw_plant` | A + B | Chilled water plant: YORK YK VSD chillers (Mode B, OptiView BAS object list and status codes), headered primary / condenser pumps and UPS-backed secondary pumps on ACH580 drives, motorized isolation valves with end switches, cooling tower cells with basins / bypass / equalizer, stratified thermal storage tanks as the decoupler, risers with remote DP, building load, utility power failure. Equipment from one CSV per type. See [docs/CHILLER_PLANT_DESIGN.md](docs/CHILLER_PLANT_DESIGN.md) |
 | `hw_plant` | A + B | Hot water plant: Lochinvar Crest condensing boilers (Mode B, BMS enable + firing rate, ignition sequence, blocking / lockout codes, efficiency by return temperature), dedicated primary pumps and headered secondary pumps on ACH580 drives, common-pipe decoupler with a bidirectional flow meter, branches with remote DP and end-of-branch 3-way valves, combustion air louver, gas pressure, emergency stop, expansion tank / loop pressure, OA-driven heating load with morning warm-up, utility power failure. Feeds AHU-1, the VAV reheat coils and UH-1. See [docs/HW_PLANT_DESIGN.md](docs/HW_PLANT_DESIGN.md) |
 | `gen_plant` | A + B (Modbus TCP) | Natural gas generator plant: 4 × 1,000 kW Cummins gensets paralleled N+1, each a Modbus TCP unit serving the PowerCommand 3.x register map (run states, metering, NFPA 110 bitmaps, real fault codes, remote start / fault reset), a DMC 1500-style paralleling master (unit 5), ATSs with open transition to the generators and closed transition back, ALC transfer inhibits, load demand, frequency dips on load steps, overload shedding and underfrequency trips. Every other instance gets its power from an ATS (`ats: ATS-n`). See [docs/GENERATOR_DESIGN.md](docs/GENERATOR_DESIGN.md) |
-| `vfd_fan` | A or B | ABB ACH580-style VFD driving a plenum fan: keypad Hand/Off/Auto, ACH580 parameters, fault codes, hardwired (DI1/AI1/RO/AO) or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md) |
+| `vfd_fan` | A or B | A VFD driving a plenum fan, **ABB ACH580 or Yaskawa Z1000** (`drive_model`): keypad Hand/Off/Auto, the drive's own parameters, terminals and fault codes, hardwired or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md), [docs/VFD_Z1000.md](docs/VFD_Z1000.md) |
 
 ## Quick start
 
@@ -106,6 +108,8 @@ configs/gen_plant/*.csv                      generators (tag, Modbus unit ID, kW
 configs/templates/hw_unit_heater.yaml        unit heater points list
 configs/templates/vfd_ach580_bacnet.yaml     ACH580-style drive, BACnet fieldbus control
 configs/templates/vfd_ach580_hardwired.yaml  ACH580-style drive, hardwired control
+configs/templates/vfd_z1000_bacnet.yaml      Yaskawa Z1000, BACnet control (manual object list)
+configs/templates/vfd_z1000_hardwired.yaml   Yaskawa Z1000, hardwired control (HVAC Initialization)
 ```
 
 An instance references a template and fills in its placeholders:
@@ -391,13 +395,42 @@ An instance takes its power from an ATS with `ats: ATS-n`.
 a closed transition (make before break). The sets then cool down for 5 min
 and stop.
 
+## Drives: choosing the make and model
+
+Every drive in the simulator sits behind one interface
+([docs/DRIVE_INTERFACE_DESIGN.md](docs/DRIVE_INTERFACE_DESIGN.md)). That
+covers the standalone drives, the AHU fan array, the plant pumps and the tower
+fans.
+- **Equipment wires roles, not terminals.** The roles are start, safeties,
+  damper interlock, speed reference, running, fault, speed feedback and damper
+  output.
+- **Each drive maps the roles to its own terminals.** Swapping the drive keeps
+  the trainees' ALC points.
+- **Registered drives:** `ach580` (ABB, default) and `z1000` (Yaskawa).
+
+| Where | Setting |
+|---|---|
+| Standalone drive | template `vfd_ach580_*` or `vfd_z1000_*`, or `equipment.params.drive_model` |
+| AHU fan array | `equipment.params.fan_drive_model: z1000` |
+| Plant pumps / tower fans | CSV column `drive_model` |
+
+Parameter overrides use the drive's own parameter names (`accel_time_1` on an
+ACH580, `c1_01` on a Z1000).
+
+**Adding a drive:** one file in `models/components/drives/` plus its templates.
+It must pass the conformance tests in `tests/test_drives.py`, which run against
+every registered drive. `tests/test_golden.py` replays recorded traces, so
+refactoring can't silently change drive behaviour.
+
 ## Code layout
 
 ```
 hvacsim/
   models/base.py         EquipmentModel: inputs, signals, faults, params (no BACnet)
   models/unit_heater.py  HW unit heater physics and sequence
-  models/components/vfd.py  ACH580-style drive component (reused by the AHU fan array)
+  models/components/drives/  Drive interface + registered drives (ach580.py, z1000.py): every
+                         drive in the simulator is built here and wired by role
+  models/components/vfd.py  ACH580 drive engine (behind drives/ach580.py)
   models/vfd_fan.py      Standalone drive + motor + fan
   models/weather_station.py  Weather station
   models/ahu.py          VAV AHU (fan array, coils, safeties, duct with VAV boxes)

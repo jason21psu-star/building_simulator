@@ -1,9 +1,22 @@
 # Drive interface and the Yaskawa Z1000: design (for review)
 
-Status: **design for review, not built yet.** This is step 1 of the
-modularization plan: one interface for every variable frequency drive in the
-simulator, with the ABB ACH580 (today's drive) and the Yaskawa Z1000 as its
-first two implementations.
+Status: **built.** This is step 1 of the modularization plan: one interface
+for every variable frequency drive in the simulator, with the ABB ACH580 and
+the Yaskawa Z1000 as its first two implementations.
+
+| Part | Where |
+|---|---|
+| Interface and registry | `hvacsim/models/components/drives/` |
+| Golden traces | `tests/golden/`, `tests/test_golden.py` |
+| Conformance and Z1000 tests | `tests/test_drives.py` |
+| Z1000 user doc | [VFD_Z1000.md](VFD_Z1000.md) |
+
+**Two additions beyond this design:**
+- Plant drive override settings accept per-model sub-dicts, because one CSV
+  group can mix makes.
+- A SF-4-VFD instance (Z1000 on BACnet) was added next to SF-3-VFD (Z1000
+  hardwired). Demo writes to it every second, inside the Z1000's 2 s
+  communication-loss detection (H5-09).
 
 **Source documents:**
 - Yaskawa *Z1000 Programming Manual* SIEP YAIZ1U 03C:

@@ -370,7 +370,7 @@ class Host:
                                                 float(unit.model.p["box_max_cfm"]), label=unit.name))
             for w in demo_cfg.get("writes", []) or []:
                 mock.add_network_output(int(unit.cfg["device_instance"]), w["object"], w["value"],
-                                        int(w.get("priority", 10)), label=unit.name)
+                                        int(w.get("priority", 10)), label=unit.name, every=int(w.get("every", 10)))
             valve = next((c for c in unit.commands if c.input == "valve_cmd"), None)
             if zone_name and valve:
                 mock.add_thermostat(Thermostat(

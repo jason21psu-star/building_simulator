@@ -1,8 +1,11 @@
 # ACH580-style VFD simulator
 
-Equipment type `vfd_fan`: an ABB ACH580-style HVAC drive running a
-direct-drive plenum fan. The drive model, `hvacsim/models/components/vfd.py`,
-is a reusable component; the AHU uses five of them.
+Equipment type `vfd_fan` with `drive_model: ach580` (the default): an ABB
+ACH580-style HVAC drive running a direct-drive plenum fan. The drive engine is
+`hvacsim/models/components/vfd.py`, behind the drive interface
+(`components/drives/ach580.py`, see [DRIVE_INTERFACE_DESIGN.md](DRIVE_INTERFACE_DESIGN.md)).
+The same drive is used by the AHU fan array and the plant pumps, and any of
+them can be swapped for a Yaskawa Z1000 ([VFD_Z1000.md](VFD_Z1000.md)).
 
 Parameter numbers, names, choices, defaults, and fault and warning codes
 follow the **ACH580 HVAC control program firmware manual

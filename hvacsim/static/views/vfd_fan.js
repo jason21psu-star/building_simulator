@@ -1,4 +1,4 @@
-// Equipment view: ACH580-style VFD with direct-drive fan
+// Equipment view: standalone VFD (ABB ACH580 or Yaskawa Z1000, by params.drive_model) with direct-drive fan
 (function () {
   const FAULTS = {2310: 'Overcurrent', 2330: 'Earth leakage', 3130: 'Input phase loss', 3210: 'DC link overvoltage',
     3220: 'DC link undervoltage', 4310: 'Excess temperature', 5091: 'Safe torque off', 6681: 'EFB comm loss',
@@ -19,6 +19,17 @@
     return out.join(', ') || '<span class="muted">not used</span>';
   }
   const contact = v => v ? '<span class="pill on">CLOSED</span>' : '<span class="pill">OPEN</span>';
+
+  // ---- Yaskawa Z1000 (Programming Manual tables 1.28 / 1.29) ----
+  const H1 = {'40': 'Forward run (2-wire)', '41': 'Reverse run (2-wire)', 'B1': 'Customer Safeties (open = coast, SAFE)',
+    'B2': 'BAS Interlock (open = baseblock, inTLK)', 'AF': 'Emergency Override Fwd (S6-01)', '14': 'Fault reset',
+    '6A': 'Drive Enable (dnE, run must cycle)', '70': 'Drive Enable 2 (dnE)', '3': 'Multi-step speed 1 (not simulated)',
+    '4': 'Multi-step speed 2 (not simulated)', '6': 'Jog (not simulated)', 'F': 'Through mode (not used)'};
+  const h1 = c => H1[c] || (/^2[0-9A-F]$/.test(c) ? `External fault ${c} (EF)` : c);
+  const H2 = {'0': 'During Run', '1': 'Zero Speed', '2': 'Speed Agree 1', '6': 'Drive Ready', 'E': 'Fault',
+    '10': 'Minor Fault', '38': 'Drive Enabled', 'B2': 'BAS Interlock Relay Contact (damper)'};
+  const h2 = c => (String(c).length === 3 && String(c)[0] === '1') ? 'NOT ' + (H2[String(c).slice(1).replace(/^0+(?=.)/, '')] || c) : (H2[c] || c);
+  const H4 = {0: 'not used', 102: 'Output frequency (U1-02)', 103: 'Output current (U1-03)', 108: 'Output power (U1-08)'};
 
   VIEWS.vfd_fan = {
     html: `
@@ -91,6 +102,7 @@
     <table style="margin-top:12px"><tbody id="vfd_act"></tbody></table>`,
 
     render(s) {
+      if (s.params.drive_model === 'z1000') return renderZ1000(s);
       const g = s.signals, p = s.params, $ = id => document.getElementById(id);
       const mode = g.keypad_mode;
       $('kp_mode').textContent = (g.override_active ? 'OVERRIDE' : mode.toUpperCase()) + (mode === 'auto' && !g.override_active ? ' · EXT1' : '');
@@ -139,4 +151,61 @@
       $('vfd_act').innerHTML = act.map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join('');
     },
   };
+
+  function renderZ1000(s) {
+    const g = s.signals, p = s.params, $ = id => document.getElementById(id);
+    const mode = g.keypad_mode;
+    $('kp_mode').textContent = g.override_active ? 'EMERGENCY OVERRIDE' : mode.toUpperCase();
+    $('kp_dir').textContent = g.running ? 'FWD' : '';
+    $('kp_state').textContent = g.status_text;
+    $('kp_hz').textContent = g.output_freq.toFixed(2);
+    $('kp_a').textContent = g.output_current.toFixed(1);
+    $('kp_kw').textContent = g.power_kw.toFixed(2);
+    $('kp_ref').textContent = g.freq_ref.toFixed(2);
+    $('kp_bus').textContent = g.dc_bus_v.toFixed(0);
+    $('kp_temp').textContent = g.drive_temp.toFixed(0);
+    $('kp_fault').textContent = g.fault_active ? g.fault_text + ' (fault)' : '';
+    $('kp_warn').textContent = g.warnings;
+    $('k_off').textContent = 'OFF'; $('k_hand').textContent = 'HAND'; $('k_auto').textContent = 'AUTO';
+    for (const m of ['off', 'hand', 'auto']) $('k_' + m).classList.toggle('sel', mode === m);
+    const ref = $('k_ref'); if (document.activeElement !== ref) ref.value = g.hand_ref;
+    $('vfd_box').setAttribute('stroke', g.fault_active ? 'var(--bad)' : g.running ? 'var(--ok)' : 'var(--ink)');
+    $('sv_hz').textContent = g.output_freq.toFixed(1) + ' Hz';
+    $('sv_state').textContent = g.fault_active ? 'FAULT' : g.running ? 'RUN' : g.baseblock ? 'BB' : 'STOP';
+    $('sv_cable').setAttribute('stroke', g.running ? 'var(--accent)' : 'var(--line)');
+    $('sv_rpm').textContent = Math.round(g.motor_rpm) + ' rpm';
+    const fan = $('vfd_fan'), spd = g.fan_rotating ? Math.max(0.05, g.airflow_cfm / p.design_cfm || g.output_freq / 60) : 0;
+    fan.style.animationPlayState = g.fan_rotating ? 'running' : 'paused';
+    if (g.fan_rotating) fan.style.animationDuration = (0.35 / spd).toFixed(2) + 's';
+    $('sv_cfm').textContent = Math.round(g.airflow_cfm).toLocaleString() + ' cfm';
+    $('sv_sp').textContent = g.fan_sp.toFixed(2) + ' in. w.c.';
+    $('sv_sto').textContent = 'Yaskawa Z1000 · HOA keypad';
+    $('sv_ovr').textContent = p.s6_01 > 0 ? `Emergency override speed S6-01 = ${p.s6_01} Hz` : '';
+
+    const rows = [];
+    for (let i = 1; i <= 7; i++) {
+      const extra = Number(p.safety_di) === i ? ' · safety circuit wired here' : '';
+      rows.push(`<tr><td>S${i}</td><td>${contact(g['s' + i + '_status'])}</td><td>H1-0${i} = ${p['h1_0' + i]}: ${h1(String(p['h1_0' + i]))}${extra}</td></tr>`);
+    }
+    const lvl = {0: '0-10 V', 1: '0-10 V', 2: '4-20 mA', 3: '0-20 mA'};
+    rows.push(`<tr><td>A1</td><td>${g.a1_level.toFixed(1)} %</td><td>${p.b1_01 === 1 ? 'Frequency reference (b1-01 = 1)' : '<span class="muted">not the reference (b1-01 = ' + p.b1_01 + ')</span>'} · ${lvl[p.h3_01]}, gain ${p.h3_03} %</td></tr>`);
+    rows.push(`<tr><td>A2</td><td>${g.a2_level.toFixed(1)} %</td><td>${p.h3_10 === '0' ? 'Frequency bias (added)' : 'not used'} · ${lvl[p.h3_09]}</td></tr>`);
+    rows.push(`<tr><td>MA-MC</td><td>${contact(g.ma)}</td><td>Fault relay N.O. (closes on fault)</td></tr>`);
+    rows.push(`<tr><td>MB-MC</td><td>${contact(g.mb)}</td><td>Fault relay N.C. (opens on fault)</td></tr>`);
+    for (const [t, k] of [['M1-M2', 'h2_01'], ['M3-M4', 'h2_02'], ['M5-M6', 'h2_03']])
+      rows.push(`<tr><td>${t}</td><td>${contact(g['m' + {h2_01: 1, h2_02: 3, h2_03: 5}[k]])}</td><td>${k.toUpperCase().replace('_', '-')} = ${p[k]}: ${h2(p[k])}</td></tr>`);
+    rows.push(`<tr><td>FM</td><td>${(g.fm_pct / 10).toFixed(2)} V</td><td>H4-01 = ${p.h4_01}: ${H4[p.h4_01] || p.h4_01}</td></tr>`);
+    rows.push(`<tr><td>AM</td><td>${(g.am_pct / 10).toFixed(2)} V</td><td>H4-04 = ${p.h4_04}: ${H4[p.h4_04] || p.h4_04}</td></tr>`);
+    $('vfd_io').innerHTML = rows.join('');
+    const src = {0: 'HOA keypad', 1: 'terminals', 2: 'serial (BACnet)'};
+    const act = [
+      ['Run command (b1-02)', src[p.b1_02]], ['Frequency reference (b1-01)', src[p.b1_01]],
+      ['Stopping method (b1-03)', p.b1_03 === 1 ? 'coast' : 'ramp'],
+      ['Output voltage', g.output_voltage.toFixed(0) + ' V'], ['Torque reference', g.torque_ref_pct.toFixed(1) + ' %'],
+      ['Motor temp (est.)', g.motor_temp.toFixed(0) + ' °C'], ['kWh', g.kwh.toFixed(2)], ['Run time', g.run_hours.toFixed(2) + ' h'],
+      ['Last fault', g.last_fault_text || '—'],
+      ['Serial idle', s.inputs.efb_idle_s.toFixed(0) + ` s (H5-09 = ${p.h5_09} s, H5-04 = ${p.h5_04}${p.h5_04 === 3 ? ' alarm only' : ''})`],
+    ];
+    $('vfd_act').innerHTML = act.map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join('');
+  }
 })();

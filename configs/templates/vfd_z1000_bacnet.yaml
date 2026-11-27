@@ -81,6 +81,6 @@ monitor:
   - { object: "binary-value,57", name: "Drive Comm Error",     signal: comm_error, active_text: "ON", inactive_text: "OFF" }
 
 demo:
-  writes:
-    - { object: "binary-value,1", value: true }
-    - { object: "analog-value,2", value: 45 }
+  writes:                             # every 1 s: faster than H5-09 (2 s), as a BAS polling the drive would
+    - { object: "binary-value,1", value: true, every: 1 }
+    - { object: "analog-value,2", value: 45, every: 1 }
