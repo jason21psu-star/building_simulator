@@ -149,7 +149,7 @@ def _number(text: str) -> Any:
             return text
 
 
-PLANT_SCHEDULES = ("chillers", "boilers", "primary_pumps", "secondary_pumps", "condenser_pumps",
+PLANT_SCHEDULES = ("chillers", "boilers", "generators", "ats", "primary_pumps", "secondary_pumps", "condenser_pumps",
                    "cooling_towers", "tanks", "branches")
 
 

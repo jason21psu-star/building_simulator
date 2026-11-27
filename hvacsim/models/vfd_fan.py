@@ -144,6 +144,7 @@ class VfdFan(EquipmentModel):
     def _step(self, h: float) -> None:
         v = self.vfd
         self._sync_inject()
+        v.powered = self.power_ok                         # ATS power (generator plant)
 
         di = [bool(self.inputs[f"di{i}"]) for i in range(1, 7)]
         sdi = int(self.p["safety_di"])

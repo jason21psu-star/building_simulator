@@ -12,7 +12,9 @@
 #            ├── CH-1..3   devices 4010031-033  MAC 31-33  (YORK OptiView BAS objects)
 #            ├── CHP-1 I/O devices 4010041-044  MAC 41-44  (one per ALC plant controller)
 #            ├── B-1..3    devices 4010051-053  MAC 51-53  (Lochinvar Crest BMS objects)
-#            └── HWP-1 I/O devices 4010061-064  MAC 61-64  (one per ALC plant controller)
+#            ├── HWP-1 I/O devices 4010061-064  MAC 61-64  (one per ALC plant controller)
+#            └── GEN-PLANT-1 I/O device 4010071  MAC 71   (ATS contacts / transfer inhibits)
+#    192.168.0.79:502   Modbus TCP: GEN-1..4 = unit IDs 1-4, paralleling master = unit ID 5
 # ===========================================================================
 
 host:
@@ -46,6 +48,7 @@ instances:
       # address: 192.168.1.20         # optional: skip Who-Is
     hw_from: HWP-1                    # coil fed by the hot water plant (reset temperature) ...
     hw_branch: EAST                   # ... on the East branch (hw_branches.csv tag)
+    ats: ATS-4                        # power from the generator plant's building ATS
 
   - name: UH-2-SIM
     template: templates/hw_unit_heater.yaml
@@ -54,6 +57,7 @@ instances:
     vars: { n: 2 }                    # fan_amps_2, zone_temp_2
     controller:
       device_instance: 240105         # same controller as UH-1, or a different one
+    ats: ATS-4
     equipment:
       params:
         hw_supply_temp: 140.0         # per-instance overrides merge into the template
@@ -63,11 +67,13 @@ instances:
     template: templates/vfd_ach580_bacnet.yaml
     device_instance: 4010011
     mac: 11
+    ats: ATS-4
 
   - name: SF-2-VFD                    # hardwired: DI1 / AI1 terminals, RO2 / RO3 / AO1 to ALC
     template: templates/vfd_ach580_hardwired.yaml
     device_instance: 4010012
     mac: 12
+    ats: ATS-4
     vars: { n: 2 }                    # sf2_status, sf2_fault, sf2_speed_fb
     controller:
       device_instance: 240110
@@ -83,6 +89,7 @@ instances:
     chw_branch: EAST                  # ... on the East riser (chw_branches.csv tag)
     hw_from: HWP-1                    # preheat + heating coils fed by the hot water plant ...
     hw_branch: EAST                   # ... on the East branch (hw_branches.csv tag)
+    ats: ATS-4                        # power from the generator plant's building ATS
 
   # --- VAV boxes on AHU-1 (one row per box in the CSV schedule) -----------------
   - schedule: vav_schedule.csv        # tag, sim_device, mac, controller_device, box size, zone ...
@@ -90,10 +97,12 @@ instances:
     served_by: AHU-1                  # boxes sit in AHU-1's duct; zones return to AHU-1
     hw_from: HWP-1                    # reheat coils fed by the hot water plant, East branch
     hw_branch: EAST
+    ats: ATS-4
 
   # --- Chilled water plant (one CSV per equipment type) -------------------------
   - name: CHP-1
     template: templates/chw_plant.yaml
+    ats: ATS-2                        # UPS loads (secondary pumps, controllers) draw from ATS-1
     plant:
       chillers: chw_plant/chillers.csv              # tag, sim_device, mac, controller_device, size ...
       primary_pumps: chw_plant/primary_pumps.csv
@@ -112,6 +121,7 @@ instances:
   # --- Hot water plant (one CSV per equipment type) ---------------------------
   - name: HWP-1
     template: templates/hw_plant.yaml
+    ats: ATS-3
     plant:
       boilers: hw_plant/boilers.csv                 # tag, sim_device, mac, controller_device, size ...
       primary_pumps: hw_plant/primary_pumps.csv     # one per boiler (boiler column)
@@ -123,3 +133,13 @@ instances:
         242011: { device_instance: 4010063, mac: 63 }   # East branch end: 3-way valve
         242012: { device_instance: 4010064, mac: 64 }   # West branch end: 3-way valve
       # controller_addresses: { 242001: 192.168.0.52 } # optional: skip Who-Is
+
+  # --- Generator plant: 4 x 1,000 kW natural gas, paralleled N+1 ----------------
+  - name: GEN-PLANT-1
+    template: templates/gen_plant.yaml
+    plant:
+      generators: gen_plant/generators.csv          # tag, unit_id (Modbus), kW rating ...
+      ats: gen_plant/ats.csv                        # tag, controller_device, priority, shed order ...
+      io_devices:
+        243001: { device_instance: 4010071, mac: 71 }   # ATS position contacts, transfer inhibits
+      # modbus: { port: 502 }                       # Modbus TCP port on the host address

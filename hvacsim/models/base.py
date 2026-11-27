@@ -90,6 +90,9 @@ class EquipmentModel:
     # largest internal integration step (simulated seconds)
     MAX_SUBSTEP = 0.5
 
+    # electrical supply from a generator plant's ATS (gen_plant); True when none is configured
+    power_ok = True
+
     def __init__(self, params: Optional[Dict[str, Any]] = None, seed: Optional[int] = None):
         params = params or {}
         unknown = set(params) - set(self.DEFAULTS)
@@ -155,6 +158,12 @@ class EquipmentModel:
     def action(self, name: str, value: Any = None) -> None:
         """Web page button (e.g. keypad key).  Override in subclasses."""
         raise KeyError(f"{self.TYPE}: no action named {name!r}")
+
+    def set_power(self, ok: bool) -> None:
+        """Power from this unit's ATS (generator plant). Plants also take it as their utility power."""
+        self.power_ok = bool(ok)
+        if hasattr(self, "set_utility"):
+            self.set_utility(ok)
 
     def set_fault(self, name: str, active: bool, value: Optional[float] = None) -> None:
         if name not in self.faults:

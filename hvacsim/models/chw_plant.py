@@ -1092,7 +1092,7 @@ class ChwPlant(EquipmentModel):
         dq = flow_meter("dcplr_flow", self.qt)
         s["dcplr_flow"] = -dq if self.fault("dcplr_flow_reversed") else dq
         s["schw_dp"] = round(max(0.0, self.plant_dp_ft / FT_PER_PSI + self._noise(0.03) + drift("schw_dp")), 2)
-        s["utility_power"] = bool(self.utility_ok)
+        s["utility_power"] = bool(getattr(self, "utility_avail", self.utility_ok))   # phase monitor: the real utility
         cold = [k["tank"].bottom for k in self.tanks]
         warm = [k["tank"].top for k in self.tanks]
         t_cold = self.t_ps if self.qt > 1 else (sum(k["tank"].bottom * -k["q"] for k in self.tanks if k["q"] < 0)

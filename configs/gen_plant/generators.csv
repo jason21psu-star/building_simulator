@@ -1,0 +1,5 @@
+tag,unit_id,kw_rating,volts,start_priority,description
+GEN-1,1,1000,480,1,Cummins C1000N6C natural gas genset (PowerCommand 3.3)
+GEN-2,2,1000,480,2,Cummins C1000N6C natural gas genset (PowerCommand 3.3)
+GEN-3,3,1000,480,3,Cummins C1000N6C natural gas genset (PowerCommand 3.3)
+GEN-4,4,1000,480,4,Cummins C1000N6C natural gas genset (PowerCommand 3.3)

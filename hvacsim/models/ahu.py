@@ -593,6 +593,7 @@ class Ahu(EquipmentModel):
 
         for d in DRIVES:
             v = self.drives[d]
+            v.powered = self.power_ok                     # ATS power (generator plant)
             v.inp.di = [bool(self.inputs[f"{d}_ss"]), False, False, chain, False, False]
             v.inp.ai1_pct = float(self.inputs[f"{d}_vfd_spd"])
             v.step(h, load_fn(d))

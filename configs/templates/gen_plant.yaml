@@ -1,0 +1,38 @@
+# ===========================================================================
+#  Template: natural gas generator plant (docs/GENERATOR_DESIGN.md)
+# ===========================================================================
+#  generators.csv: one row per genset; each is a Modbus TCP unit (unit_id)
+#    serving the Cummins PowerCommand 3.x register map (A029X159 section 13).
+#  The paralleling master (DMC 1500 style, section 7.1) is unit ID 5.
+#  ats.csv: one row per ATS.  Its position contacts and transfer inhibit are
+#    hardwired to the ALC controller in controller_device (simulator I/O device
+#    in plant.io_devices).  An instance gets its power from an ATS with
+#    `ats: ATS-n` on the instance.
+#  shed_order: 0 = never shed; the highest number is shed first on overload.
+# ===========================================================================
+
+model_name: Generator plant (simulated)
+description: Paralleled natural gas gensets, ATSs, load shedding
+
+equipment:
+  type: gen_plant
+  params:
+    building_kw_occ: 600.0         # non-HVAC building load on building_ats
+    building_kw_unocc: 200.0
+    building_ats: ATS-4
+    ups_ats: ATS-1                 # the CHW plant's UPS loads draw from this ATS
+    transfer_stagger_s: 5.0
+    load_demand_delay_min: 10.0
+    occ_days: mon-fri
+    occ_start: 6.0
+    occ_end: 18.0
+
+plant:
+  modbus:
+    port: 502                      # Modbus TCP on the host IP (unit IDs: generators 1-4, master 5)
+    # bind: 192.168.0.79           # default: the host address
+  writes:
+    min_interval: 1.0
+    analog: {deadband: 0.1, heartbeat: 30}
+    binary: {heartbeat: 30}
+  demo_logic: true                 # --demo: staged ATS release in a mock controller (polls Modbus)

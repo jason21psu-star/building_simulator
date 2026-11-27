@@ -28,7 +28,9 @@ that network, the same way MS/TP devices sit behind a router:
            ├── CH-1…3    device 4010031-033  address 5001:31-33  YORK YK OptiView BAS objects (Mode B)
            ├── CHP-1 I/O device 4010041-044  address 5001:41-44  plant BO/AO terminals for ALC 241001-241004
            ├── B-1…3     device 4010051-053  address 5001:51-53  Lochinvar Crest BMS objects (Mode B)
-           └── HWP-1 I/O device 4010061-064  address 5001:61-64  plant BO/AO terminals for ALC 242001-242012
+           ├── HWP-1 I/O device 4010061-064  address 5001:61-64  plant BO/AO terminals for ALC 242001-242012
+           └── GEN-PLANT-1 I/O  device 4010071  address 5001:71  ATS contacts / transfer inhibits for ALC 243001
+  192.168.0.79:502  Modbus TCP: GEN-1…4 = unit IDs 1-4 (PowerCommand 3.x map), paralleling master = unit ID 5
 ```
 
 - WebCTRL discovers the router and every instance with a normal Who-Is.
@@ -53,6 +55,7 @@ that network, the same way MS/TP devices sit behind a router:
 | `vav_rh` | A (virtual I/O) | Single-duct VAV with HW reheat, no fan: integrated 154 s damper actuator, airflow in cfm, 2-10 V reheat valve, zone with loads / humidity / CO2, zone sensor setpoint adjust (±1-5 °F) and override button (+30 min, max 120). Sits in an AHU's duct (`served_by`). Boxes come from a CSV schedule. See [docs/VAV_DESIGN.md](docs/VAV_DESIGN.md) |
 | `chw_plant` | A + B | Chilled water plant: YORK YK VSD chillers (Mode B, OptiView BAS object list and status codes), headered primary / condenser pumps and UPS-backed secondary pumps on ACH580 drives, motorized isolation valves with end switches, cooling tower cells with basins / bypass / equalizer, stratified thermal storage tanks as the decoupler, risers with remote DP, building load, utility power failure. Equipment from one CSV per type. See [docs/CHILLER_PLANT_DESIGN.md](docs/CHILLER_PLANT_DESIGN.md) |
 | `hw_plant` | A + B | Hot water plant: Lochinvar Crest condensing boilers (Mode B, BMS enable + firing rate, ignition sequence, blocking / lockout codes, efficiency by return temperature), dedicated primary pumps and headered secondary pumps on ACH580 drives, common-pipe decoupler with a bidirectional flow meter, branches with remote DP and end-of-branch 3-way valves, combustion air louver, gas pressure, emergency stop, expansion tank / loop pressure, OA-driven heating load with morning warm-up, utility power failure. Feeds AHU-1, the VAV reheat coils and UH-1. See [docs/HW_PLANT_DESIGN.md](docs/HW_PLANT_DESIGN.md) |
+| `gen_plant` | A + B (Modbus TCP) | Natural gas generator plant: 4 × 1,000 kW Cummins gensets paralleled N+1, each a Modbus TCP unit serving the PowerCommand 3.x register map (run states, metering, NFPA 110 bitmaps, real fault codes, remote start / fault reset), a DMC 1500-style paralleling master (unit 5), ATSs with open transition to the generators and closed transition back, ALC transfer inhibits, load demand, frequency dips on load steps, overload shedding and underfrequency trips. Every other instance gets its power from an ATS (`ats: ATS-n`). See [docs/GENERATOR_DESIGN.md](docs/GENERATOR_DESIGN.md) |
 | `vfd_fan` | A or B | ABB ACH580-style VFD driving a plenum fan: keypad Hand/Off/Auto, ACH580 parameters, fault codes, hardwired (DI1/AI1/RO/AO) or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md) |
 
 ## Quick start
@@ -98,6 +101,8 @@ configs/chw_plant/*.csv                      plant schedules: chillers, primary 
 configs/templates/hw_plant.yaml              hot water plant (sensor allocation, write settings)
 configs/hw_plant/*.csv                       plant schedules: boilers, primary pumps (one per boiler),
                                              secondary pumps, hw_branches
+configs/templates/gen_plant.yaml             generator plant (Modbus TCP port, building load, write settings)
+configs/gen_plant/*.csv                      generators (tag, Modbus unit ID, kW) and ats (priority, shed order)
 configs/templates/hw_unit_heater.yaml        unit heater points list
 configs/templates/vfd_ach580_bacnet.yaml     ACH580-style drive, BACnet fieldbus control
 configs/templates/vfd_ach580_hardwired.yaml  ACH580-style drive, hardwired control
@@ -330,6 +335,62 @@ secondary supply temperature and the branch DP, their flow and return water
 go back to the plant, and the branch's aggregate load shrinks by their
 design flow (10 MBH per gpm).
 
+## Generator plant
+
+`GEN-PLANT-1` is four 1,000 kW natural gas generator sets paralleled N+1, a
+paralleling master and four ATSs (`configs/gen_plant/*.csv`).
+
+**Modbus TCP.** The simulator listens on the host address, port 502
+(`plant.modbus.port`), like a Modbus TCP gateway in front of the
+PowerCommand 3.3 RS-485 ports:
+- **Unit IDs 1–4:** GEN-1…4, PowerCommand 3.x register map from the Cummins
+  manual A029X159.
+  - 40010 switch position and 40011 run state
+  - 40012 / 40013 fault code and type
+  - 40016 / 40017 NFPA 110 bitmaps
+  - 40018-40044 metering
+  - 40061-40075 engine data
+  - **40300 Remote Start and 40301 Fault Reset are writable**
+  - 40400+ fault bitmaps
+- **Unit ID 5:** the paralleling master, DMC 1500 map: bus and utility
+  metering, ATS 1-n blocks from 40257.
+- **Not in the DMC map:** load shed level, sets online, capacity and bus
+  load are at 40900-40904.
+- **Requests:** 1-40 registers per request, functions 03 / 04 / 06 / 16.
+- **Exceptions:** 02 for an address that isn't implemented, 0B for a unit
+  that does not answer.
+- **If port 502 can't be opened** (Linux without privileges), the
+  simulator logs the free port it used instead.
+
+**ATSs (hardwired to ALC 243001).** Each ATS has these points:
+- `atsN_norm_pos` / `atsN_emer_pos` (position contacts)
+- `atsN_xfer_inhibit` (ALC output)
+
+The controller also gets `utility_avail`, `gen_running` and `load_shed`.
+
+| ATS | Feeds | Shed order |
+|---|---|---|
+| ATS-1 | UPS / critical: CHP-1 secondary pumps, controllers | never |
+| ATS-2 | CHP-1 | last |
+| ATS-3 | HWP-1 | second |
+| ATS-4 | AHU-1, VAVs, unit heaters, VFDs, building load (600 / 200 kW) | first |
+
+An instance takes its power from an ATS with `ats: ATS-n`.
+
+**What happens on an outage:**
+1. All sets in Auto start. The first to reach rated voltage closes to the
+   dead bus, and the others synchronize and close.
+2. The ATSs transfer in priority order (open transition), unless the ALC
+   holds their transfer inhibit.
+3. Load steps dip the bus frequency (about 3.5 Hz for a 25 % step).
+4. On overload, the master sheds by shed order. Frequency held below 55 Hz
+   trips the sets on 1448.
+5. Load demand stops surplus sets but keeps N+1.
+
+**When utility returns:** after 30 min (per ATS), each ATS retransfers with
+a closed transition (make before break). The sets then cool down for 5 min
+and stop.
+
 ## Code layout
 
 ```
@@ -347,6 +408,9 @@ hvacsim/
   models/components/tower.py     Cooling tower cell with basin
   models/hw_plant.py     Hot water plant (boilers, primary/secondary, decoupler, branches)
   models/components/crest.py     Lochinvar Crest boiler + BMS object list / codes (assumed)
+  models/gen_plant.py    Generator plant: paralleling master, ATSs, bus, load shedding, power to instances
+  models/components/pcc.py       Cummins genset + PowerCommand 3.x register image / fault codes
+  modbus_tcp.py          Modbus TCP server (gateway with unit IDs) and client
   plant_runner.py        A plant = several BACnet devices (chillers / boilers + I/O devices) on one model
   models/components/airside.py  Actuators, valves, dampers, water coils, steam humidifier
   psychro.py             Moist-air psychrometrics (I-P)

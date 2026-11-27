@@ -1,0 +1,5 @@
+tag,controller_device,priority,shed_order,retransfer_delay_min,description
+ATS-1,243001,1,0,30,Critical / UPS (CHW secondary pumps and plant controllers)
+ATS-2,243001,2,1,30,CHW plant (CHP-1)
+ATS-3,243001,3,2,30,HW plant (HWP-1)
+ATS-4,243001,4,3,30,AHUs / building (AHU-1 + VAVs + unit heaters + building load)

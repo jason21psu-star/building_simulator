@@ -28,7 +28,7 @@ from .models import MODELS
 log = logging.getLogger("hvacsim")
 
 DEMO_LAN = "demo-lan"
-PLANT_TYPES = ("chw_plant", "hw_plant")   # several BACnet devices on one model (plant_runner.PlantSim)
+PLANT_TYPES = ("chw_plant", "hw_plant", "gen_plant")   # several BACnet devices on one model (plant_runner.PlantSim)
 
 
 class UnitSim:
@@ -69,8 +69,10 @@ class UnitSim:
         if self.weather is not None:
             for param, signal in self.weather_params.items():
                 self.model.p[param] = self.weather.model.signals[signal]
-        if "device_offline" in self.model.faults:
-            self.app.offline = self.model.faults["device_offline"].active
+        if "device_offline" in self.model.faults or self.model.TYPE == "vfd_fan":
+            # a drive's fieldbus adapter is powered by the drive: no power (ATS), no BACnet
+            failed = "device_offline" in self.model.faults and self.model.faults["device_offline"].active
+            self.app.offline = failed or (self.model.TYPE == "vfd_fan" and not self.model.power_ok)
         bacnet_io.read_commands(self.model, self.commands, self.params)
         if "efb_idle_s" in self.model.inputs:
             mode = self.model.p.get("comm_loss_mode", "any_message")
@@ -181,6 +183,8 @@ class Host:
         self._link_air()
         self._link_chw()
         self._link_hw()
+        self.gen = self._link_gen()
+        self.modbus = self._make_modbus()
         self.mocks = self._build_demo_controllers() if (demo and demo_controllers) else []
 
     def _make_unit(self, inst: Dict[str, Any]):
@@ -234,11 +238,43 @@ class Host:
             m.hw_plant = plant.model
             u.hw_plant = plant
 
+    def _link_gen(self):
+        """Instances with `ats: ATS-n` get their power from that ATS of the generator plant."""
+        gens = [u for u in self.units if u.model.TYPE == "gen_plant"]
+        if len(gens) > 1:
+            raise SystemExit("only one gen_plant per host is supported")
+        gen = gens[0] if gens else None
+        for u in self.units:
+            tag = u.cfg.get("ats")
+            if not tag:
+                continue
+            if gen is None:
+                log.warning("%s: ats %r but no generator plant on this host - powered by the host-wide utility", u.name, tag)
+                continue
+            a = gen.model.ats_by_tag(tag)
+            if a is None:
+                raise SystemExit(f"{u.name}: ats {tag!r} is not in {gen.name} ({[x['tag'] for x in gen.model.ats]})")
+            gen.model.loads.append({"model": u.model, "ats": a, "name": u.name})
+            u.ats = a
+        return gen
+
+    def _make_modbus(self):
+        if self.gen is None:
+            return None
+        from .modbus_tcp import ModbusTcpServer
+        mb = (self.gen.cfg.get("plant") or {}).get("modbus") or {}
+        bind = "127.0.0.1" if self.demo else str(mb.get("bind") or str(self.cfg["host"]["address"]).split("/")[0])
+        server = ModbusTcpServer(self.gen.model.modbus_units(), bind, int(mb.get("port", 502)), name=self.gen.name)
+        self.gen.modbus = server
+        return server
+
     def power(self, ok: bool, minutes: Optional[float] = None) -> None:
         """Utility power fail / restore for the whole host (optional automatic restore)."""
         self.utility_ok = bool(ok)
         self.restore_at = self.sim_time + minutes * 60.0 if (not ok and minutes) else None
         for u in self.units:
+            if getattr(u, "ats", None) is not None:
+                continue                      # powered through its ATS (the generator plant decides)
             if hasattr(u.model, "set_utility"):
                 u.model.set_utility(self.utility_ok)
                 u.event("UTILITY POWER " + ("RESTORED" if ok else "FAILED")
@@ -287,7 +323,8 @@ class Host:
             ahu.model.boxes.append(u.model)
             u.served_by = ahu
         # step order: weather station, then air handlers, then what they serve
-        rank = {"weather_station": 0, "ahu_vav_econ": 1, "chw_plant": 3, "hw_plant": 3}
+        # (the generator plant steps right after the weather station: it decides who has power)
+        rank = {"weather_station": 0, "gen_plant": 0.5, "ahu_vav_econ": 1, "chw_plant": 3, "hw_plant": 3}
         self.units.sort(key=lambda u: rank.get(u.model.TYPE, 2))
 
     def _build_demo_controllers(self):
@@ -303,14 +340,14 @@ class Host:
 
         for unit in self.units:
             if unit.model.TYPE in PLANT_TYPES:
-                from .mockalc import HwPlantDemoLogic, PlantDemoLogic
+                from .mockalc import GenPlantDemoLogic, HwPlantDemoLogic, PlantDemoLogic
                 for link in unit.all_links():
                     mock = mock_for(link.device_instance)
                     for pt in link.points:
                         mock.add_point(pt.object_name, pt.demo_object, unit.model.signal_def(pt.signal).units)
                 if (unit.cfg.get("plant") or {}).get("demo_logic", True) and unit.links:
                     first = mock_for(next(iter(unit.links)))
-                    cls = HwPlantDemoLogic if unit.model.TYPE == "hw_plant" else PlantDemoLogic
+                    cls = {"hw_plant": HwPlantDemoLogic, "gen_plant": GenPlantDemoLogic}.get(unit.model.TYPE, PlantDemoLogic)
                     first.logics.append(cls(first, unit, mocks))
                 continue
             demo_cfg = unit.cfg.get("demo") or {}
@@ -351,6 +388,8 @@ class Host:
     async def run(self) -> None:
         await asyncio.sleep(0.2)
         await self.announce()
+        if self.modbus is not None:
+            await self.modbus.start()
         tasks = [asyncio.create_task(link.run()) for u in self.units for link in u.all_links()]
         tasks += [asyncio.create_task(m.run()) for m in self.mocks]
         last = time.monotonic()
@@ -373,6 +412,8 @@ class Host:
             u.step(dt)
 
     def close(self) -> None:
+        if getattr(self, "modbus", None) is not None:
+            self.modbus.close()
         for u in self.units:
             u.close()
         for m in self.mocks:

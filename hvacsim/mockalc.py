@@ -375,7 +375,7 @@ class PlantDemoLogic:
         outs: Dict[str, Any] = {}
         for k in self.tk:
             outs[f"{k}_top_vlv"] = outs[f"{k}_bot_vlv"] = True
-        power = v("utility_power", True) is not False
+        power = bool(self.plant.model.utility_ok)       # demo shortcut: is the plant powered (utility or generator)
         if not power:
             self.restart = 60
         elif self.restart > 0:
@@ -491,7 +491,7 @@ class HwPlantDemoLogic(PlantDemoLogic):
         dt = 1.0 if self._t_prev is None else max(0.0, min(120.0, now - self._t_prev))
         self._t_prev = now
         outs: Dict[str, Any] = {}
-        power = v("utility_power", True) is not False
+        power = bool(self.plant.model.utility_ok)       # demo shortcut: is the plant powered (utility or generator)
         if not power:
             self.restart = 90.0
             self.n_bl = 1
@@ -563,3 +563,94 @@ class HwPlantDemoLogic(PlantDemoLogic):
         self.status = (f"reset SP {sp:.0f}°F (OA {oat:.0f}°F), supply {t_sup:.1f}°F, {len(firing)}/{self.n_bl} boiler(s) "
                        f"at {self.rate:.0f} %, plant DP {v('hw_dp'):.1f}/{self.dp_sp:.1f} psi, {self.n_sec} sec pump(s)"
                        + ("" if power else " - UTILITY POWER FAILED") + (f" - restart in {self.restart:.0f}s" if power and self.restart else ""))
+
+
+class GenPlantDemoLogic(PlantDemoLogic):
+    """
+    Demo-only stand-in for a trainee's generator / ATS program (docs/GENERATOR_DESIGN.md 10):
+      * polls the generators and the paralleling master over Modbus TCP (the real server)
+      * on an outage, holds transfer inhibit on the CHW and HW plant ATSs until the
+        critical and building ATSs have been on the generator bus for 30 s, then
+        releases them 30 s apart (staged restart); releases every inhibit on normal power
+    """
+
+    STAGED = ("ATS-2", "ATS-3")
+
+    def __init__(self, mock: "MockController", plant, mocks: Dict[int, "MockController"]):
+        self.mock, self.plant, self.mocks = mock, plant, mocks
+        self.label = plant.name
+        self.status = "waiting for Modbus"
+        self.targets: Dict[str, tuple] = {}
+        for f in plant.facets:
+            for c in f.commands:
+                self.targets[c.input] = (f.device_instance, objid_text(c.objid))
+        self.addr: Dict[int, str] = {}
+        self.last: Dict[str, Any] = {}
+        self.last_t: Dict[str, float] = {}
+        self.client = None
+        self.on_gen_s = 0.0
+        self._t_prev: Optional[float] = None
+        self.data: Dict[str, Any] = {}
+
+    async def _poll(self) -> bool:
+        from .modbus_tcp import ModbusTcpClient
+        server = self.plant.modbus
+        if server is None or server.server is None:
+            return False
+        if self.client is None:
+            self.client = ModbusTcpClient("127.0.0.1", server.port, timeout=1.0)
+        m = self.plant.model
+        try:
+            master = await self.client.read(5, 40900, 5)
+            status = (await self.client.read(5, 40006, 1))[0]
+            ats = []
+            for n in range(len(m.ats)):
+                ats.append((await self.client.read(5, 40257 + 60 * n + 2, 1))[0])   # ATS state
+            gens = []
+            for g in m.gens:
+                try:
+                    gens.append(await self.client.read(int(g["unit_id"]), 40010, 5))
+                except Exception:
+                    gens.append(None)
+        except Exception as err:
+            self.status = f"Modbus poll failed: {err}"
+            if self.client is not None:
+                self.client.close()
+                self.client = None
+            return False
+        self.data = {"shed": master[0], "online": master[1], "cap": master[2], "load": master[3],
+                     "utility": bool(status & (1 << 7)), "ats": ats, "gens": gens}
+        return True
+
+    async def tick(self) -> None:
+        m = self.plant.model
+        now = m.sim_time
+        dt = 1.0 if self._t_prev is None else max(0.0, min(120.0, now - self._t_prev))
+        self._t_prev = now
+        if not await self._poll():
+            return
+        d = self.data
+        tags = [a["tag"] for a in m.ats]
+        state = dict(zip(tags, d["ats"]))
+        on_gen = [t for t in tags if t not in self.STAGED and state.get(t) == 2]
+        emergency = not d["utility"]
+        if emergency and on_gen and len(on_gen) == len([t for t in tags if t not in self.STAGED]):
+            self.on_gen_s += dt
+        elif not emergency:
+            self.on_gen_s = 0.0
+        outs: Dict[str, Any] = {}
+        for i, a in enumerate(m.ats):
+            name = f"{a['pre']}_xfer_inhibit"
+            if a["tag"] in self.STAGED and emergency:
+                release_at = 30.0 * (1 + self.STAGED.index(a["tag"]))
+                outs[name] = self.on_gen_s < release_at and state.get(a["tag"]) != 2
+            else:
+                outs[name] = False
+        for name, val in outs.items():
+            if name in self.targets:
+                await self._write(name, val)
+        running = sum(1 for g in d["gens"] if g and g[1] == 3)
+        held = [n.split("_")[0].upper() for n, v in outs.items() if v]
+        self.status = (f"utility {'NORMAL' if d['utility'] else 'FAILED'}, {d['online']} set(s) online, "
+                       f"bus {d['load']}/{d['cap']} kW, {running} rated, shed level {d['shed']}"
+                       + (f", inhibiting {', '.join(held)}" if held else ""))

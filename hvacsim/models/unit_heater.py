@@ -205,7 +205,7 @@ class HotWaterUnitHeater(EquipmentModel):
 
     def _motor_step(self, h: float) -> None:
         p = self.p
-        powered = self.aquastat and not self.fault("disconnect_off")
+        powered = self.aquastat and not self.fault("disconnect_off") and self.power_ok
         if p["fan_control"] == "controller_and_aquastat":
             powered = powered and bool(self.inputs["fan_cmd"])
 

@@ -43,6 +43,7 @@ class PlantSim:
     def __init__(self, inst: Dict[str, Any], host):
         self.cfg = inst
         self.name = inst["name"]
+        self.modbus = None                 # generator plant: the host's Modbus TCP server
         eq = inst["equipment"]
         self.model = MODELS[eq["type"]](eq.get("params") or {}, layout=inst.get("plant_layout") or {})
         plant_cfg = inst.get("plant") or {}
@@ -96,7 +97,7 @@ class PlantSim:
             if sender is None:
                 sender = app
         if sender is None:
-            raise SystemExit(f"{self.name}: plant.io_devices is empty")
+            raise SystemExit(f"{self.name}: plant.io_devices is empty (one I/O device per ALC controller)")
 
         # controller links (simulator -> ALC inputs)
         by_ctl = {f.controller: f.app for f in self.facets if f.kind == "io"}
@@ -229,4 +230,5 @@ class PlantSim:
                              "ok": sum(1 for p in s["points"] if p["ok"]), "points": len(s["points"])}
                             for ctl, s in links.items()],
             "events": list(self.events)[:60],
+            "modbus": self.modbus.snapshot() if self.modbus is not None else None,
         }

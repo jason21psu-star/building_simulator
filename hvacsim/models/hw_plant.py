@@ -813,7 +813,7 @@ class HwPlant(EquipmentModel):
         dp_meas = self.plant_dp_ft / FT_PER_PSI * (0.5 if self.fault("hw_dp_tube_leak") else 1.0)
         s["hw_dp"] = round(max(0.0, dp_meas + self._noise(noisy)), 2)
         s["hw_loop_press"] = round(self.loop_press + self._noise(0.05), 2)
-        s["utility_power"] = bool(self.utility_ok)
+        s["utility_power"] = bool(getattr(self, "utility_avail", self.utility_ok))   # phase monitor: the real utility
         s["louver_open"] = self.louver.open_switch()
         s["gas_press_ok"] = not (self.fault("gas_press_low") or self.fault("gas_press_high"))
         s["boiler_estop"] = not self.estop

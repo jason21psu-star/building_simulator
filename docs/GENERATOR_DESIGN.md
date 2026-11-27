@@ -1,9 +1,12 @@
 # Natural gas generator plant: physical design (for review)
 
-Status: **design for review, not built yet.** Equipment type will be `gen_plant`
-(model `hvacsim/models/gen_plant.py`, Modbus TCP server `hvacsim/modbus_tcp.py`,
-template `configs/templates/gen_plant.yaml`, schedules `configs/gen_plant/*.csv`).
-This records the 7 design questions answered in review.
+Status: **built** as equipment type `gen_plant`:
+- model `hvacsim/models/gen_plant.py`, genset `hvacsim/models/components/pcc.py`;
+- Modbus TCP server `hvacsim/modbus_tcp.py`;
+- template `configs/templates/gen_plant.yaml`, schedules `configs/gen_plant/*.csv`.
+
+This records the 7 design questions answered in review. Section 12 describes
+how it is simulated.
 
 **Source documents:**
 - Cummins *Modbus Register Mapping*, A029X159 Issue 26 (6-2020):
@@ -263,3 +266,38 @@ Adding a generator or ATS is a row. Which instances an ATS feeds is set on each 
 1. The generator model (C1000N6C) and its timings are assumptions. The register map and fault codes come from the Cummins documents.
 2. The DMC 1500 has no load-shed-level or sets-online registers in the manual. They use a spare block (40900-40909) until the real switchgear points list is available.
 3. Nothing has been tested against a real ALC Modbus TCP integration yet. The register layout should be checked once with the ALC Modbus driver (register numbering 4xxxx vs 0-based).
+4. **Fault codes not in the manual's PC 3.x bitmaps:** 146, 151, 143, 1452
+   (breaker fail to close), 1457 (fail to synchronize) and 2678 (charger AC
+   failure) are standard Cummins codes. They appear in 40012 and the NFPA 110
+   bitmaps but set no 40400+ bitmap bit.
+5. **Gaps in register blocks:** addresses inside 40010-40075 that the manual
+   doesn't list read 65535 ("not available"), so block reads work. Other
+   unlisted addresses return exception 02.
+
+## 12. How it is simulated
+
+- **Step order:** the generator plant steps right after the weather station
+  (0.1 s substeps). It decides which ATSs are live, then powers each instance
+  through `set_power()`:
+  - drives lose power and coast;
+  - the plants treat it as their utility;
+  - the chiller and boiler BACnet interfaces go offline;
+  - a fieldbus VFD's BACnet device goes dark;
+  - unit heater fans stop.
+
+  The plants' `utility_power` phase monitors still report the real utility.
+- **Load per ATS:** live kW of the equipment behind it, taken from the models
+  (chiller kW, drive output power, boiler blowers, unit heater fan amps), plus
+  the building load on ATS-4. The CHW plant's secondary pumps count on ATS-1
+  (through the UPS).
+- **Bus frequency:** a load step of ΔP on online capacity C drops frequency by
+  14·ΔP/C Hz, recovering with τ ≈ 2.5 s. Above 105 % of capacity, frequency
+  sags 25 Hz per unit of overload. Voltage follows frequency. Sets share
+  load by rating, and a 2725 derate lowers a set's capacity to 75 %.
+- **Shedding:** overload held for 3 s sheds the ATS with the highest shed
+  order. Shed ATSs come back one at a time once there is 20 % headroom for
+  30 s.
+- **Demo logic** (`mockalc.GenPlantDemoLogic`) polls the Modbus server over
+  TCP like an ALC Modbus driver. It drives the transfer inhibits through the
+  I/O device over BACnet.
+
