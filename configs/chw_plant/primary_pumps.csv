@@ -1,4 +1,4 @@
-tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,description
-PCHWP-1,241001,2400,60,50,100,Primary CHW pump (headered)
-PCHWP-2,241001,2400,60,50,100,Primary CHW pump (headered)
-PCHWP-3,241001,2400,60,50,100,Primary CHW pump (headered)
+tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,drive_model,description
+PCHWP-1,241001,2400,60,50,100,ach580,Primary CHW pump (headered)
+PCHWP-2,241001,2400,60,50,100,ach580,Primary CHW pump (headered)
+PCHWP-3,241001,2400,60,50,100,ach580,Primary CHW pump (headered)

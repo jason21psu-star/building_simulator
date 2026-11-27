@@ -1,4 +1,4 @@
-tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,description
-CWP-1,241003,3600,80,100,200,Condenser water pump (headered)
-CWP-2,241003,3600,80,100,200,Condenser water pump (headered)
-CWP-3,241003,3600,80,100,200,Condenser water pump (headered)
+tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,drive_model,description
+CWP-1,241003,3600,80,100,200,ach580,Condenser water pump (headered)
+CWP-2,241003,3600,80,100,200,ach580,Condenser water pump (headered)
+CWP-3,241003,3600,80,100,200,ach580,Condenser water pump (headered)

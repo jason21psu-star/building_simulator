@@ -1,0 +1,86 @@
+# ===========================================================================
+#  Template: Yaskawa Z1000 controlled over BACnet (docs/VFD_Z1000.md)
+# ===========================================================================
+#  Object list: Z1000 Programming Manual SIEP YAIZ1U 03C, B.7 BACnet Objects
+#  Supported (tables B.5-B.10).  On a real site the drive is BACnet MS/TP on
+#  R+/R-/S+/S-; here it is a BACnet/IP device on the simulator's virtual network.
+#  b1-01 = 2 / b1-02 = 2: the ALC writes BV1 RUN FWD and AV2 Frequency Command (Hz).
+#  H5-04 = 3 (default): if the ALC stops talking for H5-09 (2 s) the drive shows
+#  "CE" as an ALARM and keeps running.  Set h5_04 to 0/1/2 to make it a fault.
+# ===========================================================================
+
+model_name: Z1000 (simulated)
+description: Yaskawa Z1000 HVAC drive, BACnet control
+
+equipment:
+  type: vfd_fan
+  params:
+    drive_model: z1000
+    b1_01: 2                          # frequency reference: serial (BACnet AV2)
+    b1_02: 2                          # run command: serial (BACnet BV1)
+    c1_01: 30.0
+    c1_02: 30.0
+    d2_02: 20.0                       # lower limit 20 % (12 Hz)
+    h5_04: 3                          # stopping method after CE: alarm only (manual default)
+    h5_09: 2.0                        # CE detection time, s
+    comm_loss_mode: any_message       # any BACnet request counts as the drive "hearing" the BAS
+
+# --- Commandable (C) / writable (W) objects ---------------------------------
+commands:
+  - { object: "binary-value,1",  name: "RUN FWD",          input: fb_run, active_text: RUN, inactive_text: "OFF", comm_watchdog: true }
+  - { object: "binary-value,3",  name: "EXT FAULT",        input: fb_ext_fault, active_text: FAULT, inactive_text: "OFF" }
+  - { object: "binary-value,4",  name: "FAULT RESET",      input: fb_fault_reset, active_text: RESET, inactive_text: "OFF" }
+  - { object: "binary-value,7",  name: "MF Input 3 Cmd",   input: fb_s3, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,8",  name: "MF Input 4 Cmd",   input: fb_s4, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,9",  name: "MF Input 5 Cmd",   input: fb_s5, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,10", name: "MF Input 6 Cmd",   input: fb_s6, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,11", name: "MF Input 7 Cmd",   input: fb_s7, active_text: "ON", inactive_text: "OFF" }
+  - { object: "analog-value,2",  name: "Frequency Command", input: fb_freq_hz, units: hertz, comm_watchdog: true }
+  - { object: "analog-value,27", name: "Accel Time",       param: c1_01, units: seconds }
+  - { object: "analog-value,28", name: "Decel Time",       param: c1_02, units: seconds }
+
+# --- Read-only objects -------------------------------------------------------
+monitor:
+  - { object: "analog-input,1",  name: "Analog Input 1 Level", signal: a1_level }
+  - { object: "analog-input,2",  name: "Analog Input 2 Level", signal: a2_level }
+  - { object: "analog-input,9",  name: "Rated Current n9-01",  signal: rated_current }
+  - { object: "analog-value,9",  name: "Frequency Reference",  signal: freq_ref }
+  - { object: "analog-value,10", name: "Output Frequency",     signal: output_freq }
+  - { object: "analog-value,11", name: "Output Voltage",       signal: output_voltage }
+  - { object: "analog-value,12", name: "Output Current",       signal: output_current }
+  - { object: "analog-value,13", name: "Output Power",         signal: output_power_w }
+  - { object: "analog-value,14", name: "Torque Reference",     signal: torque_ref_pct }
+  - { object: "analog-value,18", name: "DC Bus Voltage",       signal: dc_bus_v }
+  - { object: "binary-input,1",  name: "Input Terminal 1",     signal: s1_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,2",  name: "Input Terminal 2",     signal: s2_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,3",  name: "Input Terminal 3",     signal: s3_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,4",  name: "Input Terminal 4",     signal: s4_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,5",  name: "Input Terminal 5",     signal: s5_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,6",  name: "Input Terminal 6",     signal: s6_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,7",  name: "Input Terminal 7",     signal: s7_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,8",  name: "Multi-Function Out 1", signal: m1, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,9",  name: "Multi-Function Out 2", signal: m3, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,13", name: "RUN-STOP",             signal: running, active_text: RUN, inactive_text: "OFF" }
+  - { object: "binary-value,14", name: "REV-FWD",              signal: reverse, active_text: REV, inactive_text: FWD }
+  - { object: "binary-value,15", name: "READY",                signal: ready, active_text: READY, inactive_text: "OFF" }
+  - { object: "binary-value,16", name: "FAULT",                signal: fault_active, active_text: FAULTED, inactive_text: "OFF" }
+  - { object: "binary-value,18", name: "Overcurrent - Ground Fault", signal: bit_oc_gf, active_text: OC-GF, inactive_text: "OFF" }
+  - { object: "binary-value,19", name: "Main Circuit Overvoltage",   signal: bit_ov, active_text: OV, inactive_text: "OFF" }
+  - { object: "binary-value,20", name: "Drive Overload",             signal: bit_ol2, active_text: OL2, inactive_text: "OFF" }
+  - { object: "binary-value,21", name: "Drive Overheat",             signal: bit_oh, active_text: OH1-OH2, inactive_text: "OFF" }
+  - { object: "binary-value,24", name: "External Fault",             signal: bit_ef, active_text: EF0-EF, inactive_text: "OFF" }
+  - { object: "binary-value,26", name: "Mtr Ovrld-OvrTorque",        signal: bit_ol1, active_text: OL1-OL3, inactive_text: "OFF" }
+  - { object: "binary-value,28", name: "Main CKT Undervoltage",      signal: bit_uv, active_text: UV, inactive_text: "OFF" }
+  - { object: "binary-value,30", name: "Output Phase Loss",          signal: bit_lf, active_text: LF, inactive_text: "OFF" }
+  - { object: "binary-value,31", name: "Communication Error",        signal: bit_ce, active_text: CE, inactive_text: "OFF" }
+  - { object: "binary-value,33", name: "Operating",            signal: operating, active_text: OPERATING, inactive_text: "OFF" }
+  - { object: "binary-value,35", name: "Frequency Agree",      signal: freq_agree, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,41", name: "Base Block",           signal: baseblock, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-value,42", name: "Frequency Reference Mode", signal: ref_from_comm, active_text: COM, inactive_text: LOCAL }
+  - { object: "binary-value,43", name: "Run Command Mode",     signal: run_from_comm, active_text: COM, inactive_text: LOCAL }
+  - { object: "binary-value,57", name: "Drive Comm Error",     signal: comm_error, active_text: "ON", inactive_text: "OFF" }
+
+demo:
+  writes:
+    - { object: "binary-value,1", value: true }
+    - { object: "analog-value,2", value: 45 }

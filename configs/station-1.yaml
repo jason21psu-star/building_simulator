@@ -78,6 +78,21 @@ instances:
     controller:
       device_instance: 240110
 
+  - name: SF-3-VFD                    # Yaskawa Z1000, hardwired: S1 / A1 terminals, M1-M2 / MB-MC / FM to ALC
+    template: templates/vfd_z1000_hardwired.yaml
+    device_instance: 4010013
+    mac: 13
+    ats: ATS-4
+    vars: { n: 3 }                    # sf3_status, sf3_fault, sf3_speed_fb
+    controller:
+      device_instance: 240111
+
+  - name: SF-4-VFD                    # Yaskawa Z1000 on BACnet: BV1 RUN FWD, AV2 Frequency Command (Hz)
+    template: templates/vfd_z1000_bacnet.yaml
+    device_instance: 4010014
+    mac: 14
+    ats: ATS-4
+
   # --- Air handler ------------------------------------------------------------
   - name: AHU-1
     template: templates/ahu_vav_econ.yaml

@@ -1,4 +1,4 @@
-tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,description
-SCHWP-1,241002,2400,100,75,150,Secondary CHW pump (on UPS)
-SCHWP-2,241002,2400,100,75,150,Secondary CHW pump (on UPS)
-SCHWP-3,241002,2400,100,75,150,Secondary CHW pump (on UPS)
+tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,drive_model,description
+SCHWP-1,241002,2400,100,75,150,ach580,Secondary CHW pump (on UPS)
+SCHWP-2,241002,2400,100,75,150,ach580,Secondary CHW pump (on UPS)
+SCHWP-3,241002,2400,100,75,150,ach580,Secondary CHW pump (on UPS)

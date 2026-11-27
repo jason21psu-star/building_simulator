@@ -1,4 +1,4 @@
-tag,controller_device,design_gpm,range_f,approach_f,design_wb,fan_hp,ct_range_amps,basin_gal,description
-CT-1,241003,3600,10,7,78,60,100,6500,Induced-draft counterflow cell
-CT-2,241003,3600,10,7,78,60,100,6500,Induced-draft counterflow cell
-CT-3,241003,3600,10,7,78,60,100,6500,Induced-draft counterflow cell
+tag,controller_device,design_gpm,range_f,approach_f,design_wb,fan_hp,ct_range_amps,basin_gal,drive_model,description
+CT-1,241003,3600,10,7,78,60,100,6500,ach580,Induced-draft counterflow cell
+CT-2,241003,3600,10,7,78,60,100,6500,ach580,Induced-draft counterflow cell
+CT-3,241003,3600,10,7,78,60,100,6500,ach580,Induced-draft counterflow cell

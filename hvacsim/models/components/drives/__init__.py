@@ -3,3 +3,4 @@
 from .base import (COMMON_KEYS, GENERIC_FAULTS, ROLES_IN, ROLES_OUT, Drive, build_drive, drive_class,  # noqa: F401
                    drive_models, motor_for_hp, param_items, register)
 from . import ach580  # noqa: F401  (registers "ach580")
+from . import z1000  # noqa: F401  (registers "z1000")

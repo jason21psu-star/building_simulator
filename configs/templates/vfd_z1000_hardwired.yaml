@@ -1,0 +1,62 @@
+# ===========================================================================
+#  Template: Yaskawa Z1000, hardwired to the ALC controller (docs/VFD_Z1000.md)
+# ===========================================================================
+#  HVAC Initialization layout (A1-03 = 3410), User Manual 3.9 terminals:
+#    ALC BO  -> S1 (H1-01 = 40 Forward run, 2-wire)     sim BV-1001 "S1 TERMINAL"
+#    ALC AO  -> A1 (H3-01 = 0: 0-10 V)                   sim AV-1001 "A1 TERMINAL" (% of 10 V)
+#    Safety circuit (freezestat / smoke) -> S3 (H1-03 = B1 Customer Safeties): open = coast, "SAFE"
+#    Damper end switch -> S4 (H1-04 = B2 BAS Interlock): open = baseblock, "inTLK"
+#      (jumpered closed here - no damper; M5-M6 = H2-03 B2 would open the damper)
+#    drive M1-M2 (H2-01 = 0 During Run)  -> ALC BI  sf{n}_status
+#    drive MB-MC (fault relay, N.C.)     -> ALC BI  sf{n}_fault   (contact OPENS on fault)
+#    drive FM (H4-01 = 102 output freq)  -> ALC AI  sf{n}_speed_fb (% of 10 V)
+# ===========================================================================
+
+model_name: Z1000 (simulated)
+description: Yaskawa Z1000 HVAC drive, hardwired control
+
+equipment:
+  type: vfd_fan
+  params:
+    drive_model: z1000
+    b1_01: 1                          # frequency reference: terminals (A1)
+    b1_02: 1                          # run command: terminals (S1)
+    b1_03: 1                          # stopping method: coast
+    c1_01: 30.0                       # accel, s
+    c1_02: 30.0                       # decel, s
+    d2_02: 20.0                       # lower limit, % of E1-04 (12 Hz)
+    safety_di: 3                      # the simulated safety circuit opens S3 (Customer Safeties)
+
+commands:
+  - { object: "binary-value,1001", name: "S1 TERMINAL", input: s1, description: "Run (ALC BO)", active_text: CLOSED, inactive_text: OPEN }
+  - { object: "binary-value,1002", name: "S2 TERMINAL", input: s2, active_text: CLOSED, inactive_text: OPEN }
+  - { object: "binary-value,1003", name: "S3 TERMINAL", input: s3, description: "Customer safeties (closed = safe)", active_text: CLOSED, inactive_text: OPEN, relinquish_default: true }
+  - { object: "binary-value,1004", name: "S4 TERMINAL", input: s4, description: "BAS interlock / damper end switch", active_text: CLOSED, inactive_text: OPEN, relinquish_default: true }
+  - { object: "binary-value,1005", name: "S5 TERMINAL", input: s5, description: "Emergency override fwd", active_text: CLOSED, inactive_text: OPEN }
+  - { object: "binary-value,1006", name: "S6 TERMINAL", input: s6, active_text: CLOSED, inactive_text: OPEN }
+  - { object: "binary-value,1007", name: "S7 TERMINAL", input: s7, active_text: CLOSED, inactive_text: OPEN }
+  - { object: "analog-value,1001", name: "A1 TERMINAL", input: a1_pct, description: "Speed signal (ALC AO), % of 10 V", units: percent }
+  - { object: "analog-value,1002", name: "A2 TERMINAL", input: a2_pct, description: "% of 4-20 mA span", units: percent }
+
+controller:
+  min_interval: 1.0
+  writes:
+    - { name: Status (M1-M2), signal: m1,     object_name: "sf{n}_status",   demo_object: "binary-input,1{n}", heartbeat: 30 }
+    - { name: Fault (MB-MC),  signal: mb,     object_name: "sf{n}_fault",    demo_object: "binary-input,2{n}", heartbeat: 30 }
+    - { name: Speed (FM),     signal: fm_pct, object_name: "sf{n}_speed_fb", demo_object: "analog-input,1{n}", deadband: 0.5, heartbeat: 30 }
+
+monitor:
+  - { object: "analog-value,10", name: "Output Frequency", signal: output_freq }
+  - { object: "analog-value,12", name: "Output Current",   signal: output_current }
+  - { object: "analog-value,13", name: "Output Power",     signal: output_power_w }
+  - { object: "analog-value,18", name: "DC Bus Voltage",   signal: dc_bus_v }
+  - { object: "binary-value,13", name: "RUN-STOP",         signal: running, active_text: RUN, inactive_text: "OFF" }
+  - { object: "binary-value,16", name: "FAULT",            signal: fault_active, active_text: FAULTED, inactive_text: "OFF" }
+  - { object: "binary-input,1",  name: "Input Terminal 1", signal: s1_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,3",  name: "Input Terminal 3", signal: s3_status, active_text: "ON", inactive_text: "OFF" }
+  - { object: "binary-input,4",  name: "Input Terminal 4", signal: s4_status, active_text: "ON", inactive_text: "OFF" }
+
+demo:
+  writes:
+    - { object: "binary-value,1001", value: true }
+    - { object: "analog-value,1001", value: 70 }
