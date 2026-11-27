@@ -377,6 +377,44 @@ class ChwPlant(EquipmentModel):
         self.io = io
         self.drive_keys = [r["pre"] for g in PUMP_GROUPS for r in R[g]] + [t["pre"] for t in R["cooling_towers"]]
 
+    # ------------------------------------------------------------------ BACnet devices (Mode B)
+
+    def bacnet_devices(self) -> List[Dict[str, Any]]:
+        """The chillers' OptiView BAS gateways: one device each (used by plant_runner)."""
+        from .components.york_yk import state_texts
+        out = []
+        for c in self.chillers:
+            pre = c["pre"]
+            cmds, mons = [], []
+            for kind, n, oname, key, units, role in YK_OBJECTS:
+                obj = f"{kind},{n}"
+                if role == "cmd":
+                    d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
+                    if kind.startswith("binary"):
+                        d.update(active_text="RUN", inactive_text="STOP")
+                    else:
+                        d["units"] = units
+                    cmds.append(d)
+                elif isinstance(role, tuple):
+                    _tag, table, count = role
+                    mons.append({"object": obj, "name": oname, "signal": f"{pre}.{key}", "states": state_texts(table, count)})
+                else:
+                    d = {"object": obj, "name": oname, "signal": f"{pre}.{key}"}
+                    if units:
+                        d["units"] = units
+                    mons.append(d)
+            out.append({"tag": c["tag"], "pre": pre, "sim_device": int(c["sim_device"]), "mac": int(c["mac"]),
+                        "model_name": "YORK YK OptiView (simulated)",
+                        "description": c.get("description", "YORK YK VSD centrifugal chiller"),
+                        "kind": "chiller", "commands": cmds, "monitors": mons})
+        return out
+
+    def device_offline(self, pre: str) -> bool:
+        return (not self.utility_ok) or self.fault(f"{pre}_gateway_offline")
+
+    def watch_states(self) -> Dict[str, str]:
+        return {c["tag"]: self.signals[f"{c['pre']}.status"].split(" · ")[0] for c in self.chillers}
+
     @staticmethod
     def _drive_info(info: Dict[str, ParamInfo], pre: str, tag: str) -> None:
         for k, i in VFD_PARAM_INFO.items():

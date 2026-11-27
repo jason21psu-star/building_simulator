@@ -10,7 +10,9 @@
 #            ├── UH-2-SIM  device 4010002  MAC 2   -> 5001:2
 #            ├── ...       (VFDs, AHU-1, VAV-1..6, WX-1)
 #            ├── CH-1..3   devices 4010031-033  MAC 31-33  (YORK OptiView BAS objects)
-#            └── CHP-1 I/O devices 4010041-044  MAC 41-44  (one per ALC plant controller)
+#            ├── CHP-1 I/O devices 4010041-044  MAC 41-44  (one per ALC plant controller)
+#            ├── B-1..3    devices 4010051-053  MAC 51-53  (Lochinvar Crest BMS objects)
+#            └── HWP-1 I/O devices 4010061-064  MAC 61-64  (one per ALC plant controller)
 # ===========================================================================
 
 host:
@@ -42,6 +44,8 @@ instances:
     controller:
       device_instance: 240104         # <-- ALC controller device ID (trainee design)
       # address: 192.168.1.20         # optional: skip Who-Is
+    hw_from: HWP-1                    # coil fed by the hot water plant (reset temperature) ...
+    hw_branch: EAST                   # ... on the East branch (hw_branches.csv tag)
 
   - name: UH-2-SIM
     template: templates/hw_unit_heater.yaml
@@ -77,11 +81,15 @@ instances:
       device_instance: 240107         # <-- ALC AHU controller device ID (trainee design)
     chw_from: CHP-1                   # cooling coil fed by the chilled water plant ...
     chw_branch: EAST                  # ... on the East riser (chw_branches.csv tag)
+    hw_from: HWP-1                    # preheat + heating coils fed by the hot water plant ...
+    hw_branch: EAST                   # ... on the East branch (hw_branches.csv tag)
 
   # --- VAV boxes on AHU-1 (one row per box in the CSV schedule) -----------------
   - schedule: vav_schedule.csv        # tag, sim_device, mac, controller_device, box size, zone ...
     template: templates/vav_rh.yaml
     served_by: AHU-1                  # boxes sit in AHU-1's duct; zones return to AHU-1
+    hw_from: HWP-1                    # reheat coils fed by the hot water plant, East branch
+    hw_branch: EAST
 
   # --- Chilled water plant (one CSV per equipment type) -------------------------
   - name: CHP-1
@@ -100,3 +108,18 @@ instances:
         241003: { device_instance: 4010043, mac: 43 }   # condenser pumps + towers
         241004: { device_instance: 4010044, mac: 44 }   # thermal storage
       # controller_addresses: { 241001: 192.168.0.51 } # optional: skip Who-Is
+
+  # --- Hot water plant (one CSV per equipment type) ---------------------------
+  - name: HWP-1
+    template: templates/hw_plant.yaml
+    plant:
+      boilers: hw_plant/boilers.csv                 # tag, sim_device, mac, controller_device, size ...
+      primary_pumps: hw_plant/primary_pumps.csv     # one per boiler (boiler column)
+      secondary_pumps: hw_plant/secondary_pumps.csv
+      branches: hw_plant/hw_branches.csv            # remote DP, end-of-branch temp, 3-way valve
+      io_devices:                                   # simulator I/O device per ALC plant controller
+        242001: { device_instance: 4010061, mac: 61 }   # HW plant: boilers, primary pumps, boiler room
+        242002: { device_instance: 4010062, mac: 62 }   # secondary pumps, headers, decoupler
+        242011: { device_instance: 4010063, mac: 63 }   # East branch end: 3-way valve
+        242012: { device_instance: 4010064, mac: 64 }   # West branch end: 3-way valve
+      # controller_addresses: { 242001: 192.168.0.52 } # optional: skip Who-Is

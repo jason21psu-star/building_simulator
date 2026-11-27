@@ -1,0 +1,48 @@
+# ===========================================================================
+#  Template: hot water plant (docs/HW_PLANT_DESIGN.md)
+# ===========================================================================
+#  The equipment comes from CSV schedules (plant: section of the host config),
+#  one file per equipment type.  Point names are generated from each row's
+#  tag (PHWP-2 -> phwp2_ss, phwp2_vfd_spd, phwp2_amps ...) and belong to the
+#  ALC controller in the row's controller_device column.  Every boiler needs
+#  exactly one dedicated primary pump (primary_pumps.csv "boiler" column).
+#
+#  BACnet devices the plant presents on the virtual network:
+#    one per boiler (sim_device / mac columns): Lochinvar Crest BMS objects
+#      (ASSUMED names - see the design doc, open item 1)
+#    one I/O device per ALC controller (plant.io_devices): the BO/AO objects
+#      the controller's network outputs write ("the field wiring")
+#  Sensor values are written into the controllers' out-of-service inputs by
+#  object name.
+# ===========================================================================
+
+model_name: Hot water plant (simulated)
+description: Condensing boilers, primary/secondary pumps, decoupler
+
+equipment:
+  type: hw_plant
+  params:
+    design_mbh: 8000.0             # building load at the design OA temp
+    design_oat: 0.0
+    reheat_floor_pct: 10.0
+    warmup_factor: 1.3
+    hws_design_temp: 160.0
+    hwr_design_temp: 140.0
+    main_loss_psi: 8.0
+    loop_volume_gal: 15000.0
+    design_speed_hz: 55.0          # balancer speed for design flow
+    fill_pressure_psi: 12.0
+    occ_days: mon-fri
+    occ_start: 6.0
+    occ_end: 18.0
+
+plant:
+  # which ALC controller gets each plant sensor (defaults shown)
+  header_sensors:
+    242001: [utility_power, louver_open, gas_press_ok, boiler_estop, boiler_rm_temp]
+    242002: [phws_temp, phwr_temp, shws_temp, shwr_temp, shw_flow, hw_dcplr_flow, hw_dp, hw_loop_press]
+  writes:
+    min_interval: 1.0
+    analog: {deadband: 0.1, heartbeat: 30}
+    binary: {heartbeat: 30}
+  demo_logic: true                 # --demo: run a simple plant sequence in the mock controllers

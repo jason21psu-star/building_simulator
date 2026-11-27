@@ -1,9 +1,10 @@
 # Hot water plant simulator: physical design (for review)
 
-Status: **design for review, not built yet.** Equipment type will be `hw_plant`
-(model `hvacsim/models/hw_plant.py`, template `configs/templates/hw_plant.yaml`,
-schedules `configs/hw_plant/*.csv`). This records the 11 design questions
-answered in review.
+Status: **built** as equipment type `hw_plant` (model
+`hvacsim/models/hw_plant.py`, boiler `hvacsim/models/components/crest.py`,
+template `configs/templates/hw_plant.yaml`, schedules `configs/hw_plant/*.csv`).
+This records the 11 design questions answered in review; section 14
+describes how each part is simulated.
 
 **Source documents:** none yet. The Lochinvar Crest manuals could not be
 fetched from this environment. Every Crest-specific value below (timings,
@@ -223,6 +224,10 @@ All object definitions are in one table, so real Lochinvar names and instance nu
 
 ## 13. Open items
 
+0. **Boiler minimum flow** is assumed to be 120 gpm (30 % of design) *(A)*.
+   The pump drives' 15 Hz minimum frequency gives about 110 gpm, so turning a
+   primary pump all the way down opens the flow switch.
+
 1. **Lochinvar Crest manuals** are needed to replace the *(A)* values:
    - the Installation & Operation manual;
    - the service manual (FB-SER);
@@ -246,3 +251,37 @@ All object definitions are in one table, so real Lochinvar names and instance nu
    - branch table;
    - device list.
 4. Nothing has been tested against a real Crest BMS interface or ALC integration yet.
+
+## 14. How it is simulated
+
+- **Hydraulics** (every 0.5 s substep): each primary pump with its boiler is
+  one circuit, balanced so the balancer speed (55 Hz) gives the boiler's design
+  flow. The decoupler is a low-resistance common pipe; the solver finds the
+  decoupler flow at which primary flow − secondary flow = decoupler flow. The
+  secondary pumps work against the main plus the parallel branches. Each branch
+  end is the aggregate coil valves, the connected equipment's own flow, and the
+  3-way bypass in parallel.
+- **Temperatures:** the boilers heat their own flow (heat exchanger plus water,
+  about 3,000 Btu/°F each). The primary return mixes secondary return with any
+  supply short-circuiting through the decoupler. The secondary supply mixes
+  primary supply with any return water coming through the decoupler the other
+  way. The return lags by the loop volume (15,000 gal).
+- **Boiler** (`components/crest.py`): the sequence, limits and codes of
+  section 2. A no-flow hot spot at the high limit well makes the manual-reset
+  high limit trip when a boiler fires without flow (stuck flow switch).
+  Efficiency follows return temperature; flue temperature and condensate
+  follow from it.
+- **Building:** heating coil banks (ε-NTU, EAT 55 °F) per branch. Their valves
+  move toward the opening that meets the load (τ = 30 s). The load comes from
+  OA temperature, the reheat floor, night setback and morning warm-up, minus
+  the connected equipment. The end-of-branch pipe temperature is purged by the
+  flow that reaches the far end (3-way bypass plus the last coils) and cools
+  toward the ceiling space otherwise.
+- **Loop pressure:** fill pressure plus thermal expansion of the mean loop
+  temperature. A waterlogged tank multiplies the swing by six and lifts the
+  relief valve at 30 psig.
+- **Boiler room:** temperature from boiler casing losses and the louver
+  bringing in outdoor air.
+- **Demo logic** (`mockalc.HwPlantDemoLogic`, demo mode only): section 13,
+  item 2, running on simulated time.
+

@@ -1,7 +1,8 @@
 """
 A plant instance on the simulator host: one physics model, several BACnet devices.
 
-  * one device per chiller (Mode B): the YORK OptiView BAS object list
+  * one device per chiller / boiler (Mode B): the YORK OptiView BAS object list
+    or the Lochinvar Crest BMS object list
   * one I/O device per ALC plant controller (Mode A): the BO/AO objects that
     controller's network outputs write, i.e. the field wiring
   * one controller link per ALC controller: sensor values written into its
@@ -18,8 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from . import bacnet_io
-from .models.chw_plant import ChwPlant
-from .models.components.york_yk import YK_OBJECTS, state_texts
+from .models import MODELS
 
 log = logging.getLogger("hvacsim")
 
@@ -28,7 +28,7 @@ log = logging.getLogger("hvacsim")
 class Facet:
     """One BACnet device of the plant."""
     name: str
-    kind: str                      # "chiller" or "io"
+    kind: str                      # "chiller", "boiler" or "io"
     device_instance: int
     mac: int
     address: str
@@ -36,7 +36,7 @@ class Facet:
     commands: List[bacnet_io.CommandPoint] = field(default_factory=list)
     monitors: List[bacnet_io.MonitorPoint] = field(default_factory=list)
     controller: Optional[int] = None
-    chiller: Optional[Dict[str, Any]] = None
+    pre: Optional[str] = None      # equipment prefix (Mode B devices)
 
 
 class PlantSim:
@@ -44,7 +44,7 @@ class PlantSim:
         self.cfg = inst
         self.name = inst["name"]
         eq = inst["equipment"]
-        self.model = ChwPlant(eq.get("params") or {}, layout=inst.get("plant_layout") or {})
+        self.model = MODELS[eq["type"]](eq.get("params") or {}, layout=inst.get("plant_layout") or {})
         plant_cfg = inst.get("plant") or {}
         self.weather = None
         self.served_by = None
@@ -56,35 +56,15 @@ class PlantSim:
         net = host.virtual_network
         m = self.model
 
-        # chillers: YORK OptiView BAS object list
-        for c in m.chillers:
-            pre = c["pre"]
-            node = {"name": c["tag"], "device_instance": int(c["sim_device"]), "mac": int(c["mac"]),
-                    "model_name": "YORK YK OptiView (simulated)",
-                    "description": c.get("description", "YORK YK VSD centrifugal chiller")}
+        # Mode B equipment (chillers: YORK OptiView BAS objects; boilers: Crest BMS objects)
+        for d in m.bacnet_devices():
+            node = {"name": d["tag"], "device_instance": d["sim_device"], "mac": d["mac"],
+                    "model_name": d["model_name"], "description": d["description"]}
             app = bacnet_io.build_node(node, host.vlan_name, net)
-            cmds, mons = [], []
-            for kind, n, oname, key, units, role in YK_OBJECTS:
-                obj = f"{kind},{n}"
-                if role == "cmd":
-                    d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
-                    if kind.startswith("binary"):
-                        d.update(active_text="RUN", inactive_text="STOP")
-                    else:
-                        d["units"] = units
-                    cmds.append(d)
-                elif isinstance(role, tuple):
-                    _tag, table, count = role
-                    mons.append({"object": obj, "name": oname, "signal": f"{pre}.{key}", "states": state_texts(table, count)})
-                else:
-                    d = {"object": obj, "name": oname, "signal": f"{pre}.{key}"}
-                    if units:
-                        d["units"] = units
-                    mons.append(d)
-            commands, _params = bacnet_io.add_command_points(app, m, cmds)
-            monitors = bacnet_io.add_monitor_points(app, m, mons)
-            self.facets.append(Facet(c["tag"], "chiller", node["device_instance"], node["mac"],
-                                     f"{net}:{node['mac']}", app, commands, monitors, chiller=c))
+            commands, _params = bacnet_io.add_command_points(app, m, d["commands"])
+            monitors = bacnet_io.add_monitor_points(app, m, d["monitors"])
+            self.facets.append(Facet(d["tag"], d["kind"], node["device_instance"], node["mac"],
+                                     f"{net}:{node['mac']}", app, commands, monitors, pre=d["pre"]))
 
         # I/O devices: one per ALC controller that has outputs
         io_cfg = {int(k): v for k, v in (plant_cfg.get("io_devices") or {}).items()}
@@ -103,11 +83,13 @@ class PlantSim:
                     "description": f"{self.name} hardwired I/O for ALC controller {ctl}"}
             app = bacnet_io.build_node(node, host.vlan_name, net)
             cmds = []
+            names = getattr(m, "io_names", {})
             for i, name in enumerate(io["bo"], start=1):
-                cmds.append({"object": f"binary-output,{i}", "name": name, "input": name,
+                cmds.append({"object": f"binary-output,{i}", "name": names.get(name, name), "input": name,
                              "active_text": "ON", "inactive_text": "OFF"})
             for i, name in enumerate(io["ao"], start=1):
-                cmds.append({"object": f"analog-output,{i}", "name": name, "input": name, "units": "percent"})
+                cmds.append({"object": f"analog-output,{i}", "name": names.get(name, name), "input": name,
+                             "units": "percent"})
             commands, _params = bacnet_io.add_command_points(app, m, cmds)
             self.facets.append(Facet(node["name"], "io", node["device_instance"], node["mac"],
                                      f"{net}:{node['mac']}", app, commands, [], controller=ctl))
@@ -157,9 +139,8 @@ class PlantSim:
             for param, signal in self.weather_params.items():
                 m.p[param] = self.weather.model.signals[signal]
         for f in self.facets:
-            if f.kind == "chiller":
-                pre = f.chiller["pre"]
-                f.app.offline = (not m.utility_ok) or m.fault(f"{pre}_gateway_offline")
+            if f.pre is not None:
+                f.app.offline = m.device_offline(f.pre)
             bacnet_io.read_commands(m, f.commands)
         if dt > 0:
             m.step(dt)
@@ -175,12 +156,13 @@ class PlantSim:
             for cp in f.commands:
                 if m.signal_def(cp.input).kind == "binary":
                     watched[f"input {cp.input}"] = m.inputs[cp.input]
-        for c in m.chillers:
-            watched[f"{c['tag']}"] = m.signals[f"{c['pre']}.status"].split(" · ")[0]
+        watched.update(m.watch_states())
         for k in m.drive_keys:
             st = m.signals[f"{k}.status"].split("|")
             watched[f"{k.upper()} drive"] = st[1] if len(st) > 1 else ""
         watched["utility power"] = "NORMAL" if m.utility_ok else "FAILED"
+        if hasattr(m, "estop"):
+            watched["boiler room emergency stop"] = "PRESSED" if m.estop else "NORMAL"
         for k, v in watched.items():
             if k in self._watch and self._watch[k] != v:
                 shown = v if isinstance(v, str) else ("ON" if v else "OFF")

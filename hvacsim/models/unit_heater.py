@@ -54,6 +54,7 @@ class HotWaterUnitHeater(EquipmentModel):
         # --- hot water / coil --------------------------------------------
         "hw_supply_temp": 180.0,        # F, plant loop supply temperature
         "hw_flow_gpm": 3.0,             # gpm through a fully open valve
+        "hw_dp_pct": 100.0,             # HW branch DP, % of design (set by a hw_plant)
         "coil_ua_fan": 250.0,           # BTU/h-F, coil UA with fan at speed
         "coil_ua_natural": 20.0,        # BTU/h-F, coil UA with fan off
         "coil_capacitance": 10.0,       # BTU/F, coil water + copper/aluminum
@@ -265,7 +266,9 @@ class HotWaterUnitHeater(EquipmentModel):
         flow_frac = max(self.valve_pos, leak)
         if self.fault("no_hot_water"):
             flow_frac *= 0.05  # pumps off: only thermosiphon
-        m_cp = 500.0 * p["hw_flow_gpm"] * flow_frac  # BTU/h-F
+        dp_fac = math.sqrt(max(0.0, p["hw_dp_pct"]) / 100.0)
+        m_cp = 500.0 * p["hw_flow_gpm"] * flow_frac * dp_fac  # BTU/h-F
+        self.hw_gpm = m_cp / 500.0
 
         # branch piping upstream of the valve
         t_sup = self._supply_temp()
@@ -279,6 +282,7 @@ class HotWaterUnitHeater(EquipmentModel):
         self.q_coil = ua * (self.t_coil - self.t_space)
         dtc = (m_cp * (self.t_branch - self.t_coil) - self.q_coil) / p["coil_capacitance"]
         self.t_coil += dtc * hours
+        self.hw_rwt = self.t_coil          # water leaves at about the coil temperature
 
         # supply pipe / aquastat bulb
         if flow_frac > 0.001:

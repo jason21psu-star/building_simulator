@@ -2,6 +2,7 @@
 
 from .ahu import Ahu
 from .chw_plant import ChwPlant
+from .hw_plant import HwPlant
 from .base import EquipmentModel, FaultDef, SignalDef
 from .unit_heater import HotWaterUnitHeater
 from .vav import VavReheat
@@ -15,6 +16,7 @@ MODELS = {
     Ahu.TYPE: Ahu,
     VavReheat.TYPE: VavReheat,
     ChwPlant.TYPE: ChwPlant,
+    HwPlant.TYPE: HwPlant,
 }
 
 __all__ = ["EquipmentModel", "FaultDef", "SignalDef", "MODELS"]

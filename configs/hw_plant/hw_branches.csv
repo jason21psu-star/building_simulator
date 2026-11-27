@@ -1,0 +1,3 @@
+tag,controller_device,load_share_pct,design_remote_dp_psi,eob_bypass_pct,description
+EAST,242011,55,6,5,East branch (AHU-1 + VAV reheat + UH-1 + aggregate load)
+WEST,242012,45,6,5,West branch (aggregate load)

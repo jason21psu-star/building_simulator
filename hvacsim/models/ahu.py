@@ -71,6 +71,7 @@ class Ahu(EquipmentModel):
         "hw_supply_temp": 140.0,
         "chw_supply_temp": 44.0,
         "loop_dp_pct": 100.0,          # loop differential pressure, % of design
+        "hw_dp_pct": 100.0,            # hot water branch differential pressure, % of design
         # weather (follows the host weather station when there is one)
         "oat": 50.0,
         "oa_w": 0.0038,
@@ -109,6 +110,7 @@ class Ahu(EquipmentModel):
         "hw_supply_temp": ParamInfo("", "HW supply", "Conditions", "°F", minimum=40, maximum=250),
         "chw_supply_temp": ParamInfo("", "CHW supply", "Conditions", "°F", minimum=30, maximum=80),
         "loop_dp_pct": ParamInfo("", "Loop dP", "Conditions", "%", minimum=0, maximum=200),
+        "hw_dp_pct": ParamInfo("", "HW loop dP", "Conditions", "%", minimum=0, maximum=200),
         "demand_override": ParamInfo("", "VAV demand (-1 = schedule)", "Conditions", "%", minimum=-1, maximum=110),
         "load_scale": ParamInfo("", "Building load", "Conditions", "%", minimum=0, maximum=200),
         "filter_loading": ParamInfo("", "Filter loading (0-1)", "Conditions", "", minimum=0, maximum=1),
@@ -658,8 +660,9 @@ class Ahu(EquipmentModel):
         hw_ok = not self.fault("hw_plant_off")
         chw_ok = not self.fault("chw_plant_off")
         dp_fac = math.sqrt(max(0.0, p["loop_dp_pct"]) / 100.0)
-        ph_gpm = 26.0 * equal_percentage(ph_pos) * dp_fac if hw_ok else 0.0
-        hc_gpm = 26.0 * equal_percentage(htg_pos) * dp_fac if hw_ok else 0.0
+        hw_fac = math.sqrt(max(0.0, p["hw_dp_pct"]) / 100.0)
+        ph_gpm = 26.0 * equal_percentage(ph_pos) * hw_fac if hw_ok else 0.0
+        hc_gpm = 26.0 * equal_percentage(htg_pos) * hw_fac if hw_ok else 0.0
         cc_gpm = 180.0 * equal_percentage(clg_pos) * dp_fac if chw_ok else 0.0
         chw_t = self.fault_value("chw_warm") if self.fault("chw_warm") else p["chw_supply_temp"]
 

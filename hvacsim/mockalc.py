@@ -440,3 +440,126 @@ class PlantDemoLogic:
         self.status = (f"load {self.load:.0f} t, {self.n_ch} chiller(s), plant DP {v('schw_dp'):.1f}/{self.dp_sp:.1f} psi"
                        f", remote {min(rdp) if rdp else 0:.1f} psi, {self.n_sec} sec pump(s)"
                        + ("" if power else " - UTILITY POWER FAILED") + (f" - restart in {self.restart}s" if power and self.restart else ""))
+
+
+class HwPlantDemoLogic(PlantDemoLogic):
+    """
+    Demo-only stand-in for a trainee's hot water plant program (docs/HW_PLANT_DESIGN.md 13.2):
+      * OA reset 160 °F at 0 °F OA -> 120 °F at 60 °F OA
+      * one PI firing rate for the running boilers; lead/lag staging (add above 80 % for
+        10 min, drop below 30 % for 10 min), weekly lead rotation, alarmed boilers skipped
+      * each primary pump starts before its boiler is enabled and runs 2 min after it stops
+      * secondary pumps on plant DP, setpoint trimmed by the branch remote DPs
+      * end-of-branch 3-way valves hold 10 °F below the supply setpoint
+      * louver open with any boiler enabled; staggered restart after a power outage
+    """
+
+    def __init__(self, mock: "MockController", plant, mocks: Dict[int, "MockController"]):
+        self.mock, self.plant, self.mocks = mock, plant, mocks
+        self.label = plant.name
+        self.status = ""
+        self.targets: Dict[str, tuple] = {}
+        for f in plant.facets:
+            for c in f.commands:
+                self.targets[c.input] = (f.device_instance, objid_text(c.objid))
+        m = plant.model
+        self.bl = [b["pre"] for b in m.boilers]
+        self.pump_of = {b["pre"]: b["pumpx"]["pre"] for b in m.boilers}
+        self.sp = [x["pre"] for x in m.pumps["secondary_pumps"]]
+        self.br = [(b["pre"], int(b["controller_device"])) for b in m.branches]
+        self.addr: Dict[int, str] = {}
+        self.last: Dict[str, Any] = {}
+        self.last_t: Dict[str, float] = {}
+        self.n_bl = 1
+        self.rate = 30.0
+        self.up = self.down = 0
+        self.sspd = 70.0
+        self.dp_sp = 15.0
+        self.n_sec = 1
+        self.eob = {pre: 0.0 for pre, _c in self.br}
+        self.pump_run: Dict[str, float] = {b: 0.0 for b in self.bl}     # s the pump has run
+        self.pump_post: Dict[str, float] = {b: 0.0 for b in self.bl}    # s of post-run left
+        self.restart = 0.0
+        self.ticks = 0
+        self._t_prev: Optional[float] = None
+
+    async def tick(self) -> None:
+        v = lambda n, d=0.0, ctl=None: (self.value(n, ctl) if self.value(n, ctl) is not None else d)
+        self.ticks += 1
+        m = self.plant.model
+        now = m.sim_time                        # timers run on simulated time (the host may run faster)
+        dt = 1.0 if self._t_prev is None else max(0.0, min(120.0, now - self._t_prev))
+        self._t_prev = now
+        outs: Dict[str, Any] = {}
+        power = v("utility_power", True) is not False
+        if not power:
+            self.restart = 90.0
+            self.n_bl = 1
+        elif self.restart > 0:
+            self.restart = max(0.0, self.restart - dt)
+        oat = float(m.p["oat"])
+        sp = max(120.0, min(160.0, 160.0 - (oat - 0.0) * 40.0 / 60.0))
+        t_sup = v("shws_temp", sp)
+        # lead rotation (weekly) and boilers available (not alarmed)
+        week = m.clock().isocalendar()[1]
+        order = self.bl[week % len(self.bl):] + self.bl[:week % len(self.bl)] if self.bl else []
+        ok = [b for b in order if v(f"{b}_alarm", False) is not True]
+        on_set = ok[:self.n_bl] if power and self.restart == 0 else []
+        firing = [b for b in on_set if self.pump_run[b] >= 30.0]
+        if firing:
+            self.rate = max(5.0, min(100.0, self.rate + 0.03 * (sp - t_sup) * dt))
+        else:
+            self.rate = 30.0
+        if self.rate > 80.0 and self.n_bl < len(ok):
+            self.up += dt
+        else:
+            self.up = 0
+        if self.rate < 30.0 and self.n_bl > 1:
+            self.down += dt
+        else:
+            self.down = 0
+        if self.up > 600:
+            self.n_bl, self.up, self.rate = self.n_bl + 1, 0, self.rate * 0.6
+        if self.down > 600:
+            self.n_bl, self.down = self.n_bl - 1, 0
+        for b in self.bl:
+            pump = self.pump_of[b]
+            want = b in on_set
+            if want:
+                self.pump_run[b] += dt if v(f"{pump}_amps") > 0.5 else 0.0
+                self.pump_post[b] = 120.0
+            else:
+                self.pump_run[b] = 0.0
+                self.pump_post[b] = max(0.0, self.pump_post[b] - dt) if power else 0.0
+            outs[f"{pump}_ss"] = want or self.pump_post[b] > 0
+            outs[f"{pump}_vfd_spd"] = 91.7
+            enable = want and self.pump_run[b] >= 30.0
+            outs[f"{b}.bms_enable"] = enable
+            outs[f"{b}.bms_rate"] = round(self.rate, 1) if enable else 0.0
+        outs["louver"] = bool(on_set)
+        # secondary pumps: plant DP, setpoint trimmed by the remote DPs
+        rdp = [self.value("hw_remote_dp", ctl) for _p, ctl in self.br]
+        rdp = [x for x in rdp if x is not None]
+        if rdp and self.ticks % 30 == 0:
+            self.dp_sp = max(5.0, min(25.0, self.dp_sp + 0.5 * (6.0 - min(rdp))))
+        self.sspd = max(30.0, min(100.0, self.sspd + 0.3 * (self.dp_sp - v("hw_dp"))))
+        flow = v("shw_flow")
+        if flow > 700:
+            self.n_sec = 2
+        elif flow < 450:
+            self.n_sec = 1
+        sec_on = power and self.restart < 60.0
+        for i, p in enumerate(self.sp):
+            outs[f"{p}_ss"], outs[f"{p}_vfd_spd"] = sec_on and i < self.n_sec, self.sspd
+        # end-of-branch 3-way valves
+        for pre, ctl in self.br:
+            t = self.value("hw_eob_temp", ctl)
+            if t is not None:
+                self.eob[pre] = max(0.0, min(100.0, self.eob[pre] + 0.05 * (sp - 10.0 - t) * dt))
+            outs[f"{pre}_hw_eob_vlv"] = round(self.eob[pre], 1)
+        for name, val in outs.items():
+            if name in self.targets:
+                await self._write(name, val)
+        self.status = (f"reset SP {sp:.0f}°F (OA {oat:.0f}°F), supply {t_sup:.1f}°F, {len(firing)}/{self.n_bl} boiler(s) "
+                       f"at {self.rate:.0f} %, plant DP {v('hw_dp'):.1f}/{self.dp_sp:.1f} psi, {self.n_sec} sec pump(s)"
+                       + ("" if power else " - UTILITY POWER FAILED") + (f" - restart in {self.restart:.0f}s" if power and self.restart else ""))

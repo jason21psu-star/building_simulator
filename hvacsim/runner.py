@@ -28,6 +28,7 @@ from .models import MODELS
 log = logging.getLogger("hvacsim")
 
 DEMO_LAN = "demo-lan"
+PLANT_TYPES = ("chw_plant", "hw_plant")   # several BACnet devices on one model (plant_runner.PlantSim)
 
 
 class UnitSim:
@@ -179,10 +180,11 @@ class Host:
         self.weather = self._link_weather(h.get("weather"))
         self._link_air()
         self._link_chw()
+        self._link_hw()
         self.mocks = self._build_demo_controllers() if (demo and demo_controllers) else []
 
     def _make_unit(self, inst: Dict[str, Any]):
-        if inst["equipment"].get("type") == "chw_plant":
+        if inst["equipment"].get("type") in PLANT_TYPES:
             from .plant_runner import PlantSim
             return PlantSim(inst, self)
         return UnitSim(inst, self)
@@ -207,6 +209,30 @@ class Host:
                                  f"({[b['tag'] for b in plant.model.branches]})")
             plant.model.ahus.append({"model": u.model, "branch": branch, "name": u.name})
             u.chw_plant = plant
+
+    def _link_hw(self) -> None:
+        """Feed hot water coils with `hw_from: <plant>` / `hw_branch: <branch tag>` from a hw_plant."""
+        for u in self.units:
+            name = u.cfg.get("hw_from")
+            if not name:
+                continue
+            try:
+                plant = self.unit(name)
+            except KeyError:
+                log.warning("%s: hw_from %r is not on this host - using its fixed HW supply parameters", u.name, name)
+                continue
+            m = u.model
+            kind = {"ahu_vav_econ": "ahu", "vav_rh": "vav", "hw_unit_heater": "uh"}.get(m.TYPE)
+            if plant.model.TYPE != "hw_plant" or kind is None:
+                raise SystemExit(f"{u.name}: hw_from must name a hw_plant, and the unit must be an AHU, VAV or unit heater")
+            tag = str(u.cfg.get("hw_branch") or plant.model.branches[0]["tag"])
+            branch = next((b for b in plant.model.branches if b["tag"].lower() == tag.lower()), None)
+            if branch is None:
+                raise SystemExit(f"{u.name}: hw_branch {tag!r} is not a branch of {name} "
+                                 f"({[b['tag'] for b in plant.model.branches]})")
+            plant.model.loads.append({"kind": kind, "model": m, "branch": branch, "name": u.name})
+            m.hw_plant = plant.model
+            u.hw_plant = plant
 
     def power(self, ok: bool, minutes: Optional[float] = None) -> None:
         """Utility power fail / restore for the whole host (optional automatic restore)."""
@@ -261,7 +287,7 @@ class Host:
             ahu.model.boxes.append(u.model)
             u.served_by = ahu
         # step order: weather station, then air handlers, then what they serve
-        rank = {"weather_station": 0, "ahu_vav_econ": 1, "chw_plant": 3}
+        rank = {"weather_station": 0, "ahu_vav_econ": 1, "chw_plant": 3, "hw_plant": 3}
         self.units.sort(key=lambda u: rank.get(u.model.TYPE, 2))
 
     def _build_demo_controllers(self):
@@ -276,15 +302,16 @@ class Host:
             return mocks[dev]
 
         for unit in self.units:
-            if unit.model.TYPE == "chw_plant":
-                from .mockalc import PlantDemoLogic
+            if unit.model.TYPE in PLANT_TYPES:
+                from .mockalc import HwPlantDemoLogic, PlantDemoLogic
                 for link in unit.all_links():
                     mock = mock_for(link.device_instance)
                     for pt in link.points:
                         mock.add_point(pt.object_name, pt.demo_object, unit.model.signal_def(pt.signal).units)
                 if (unit.cfg.get("plant") or {}).get("demo_logic", True) and unit.links:
                     first = mock_for(next(iter(unit.links)))
-                    first.logics.append(PlantDemoLogic(first, unit, mocks))
+                    cls = HwPlantDemoLogic if unit.model.TYPE == "hw_plant" else PlantDemoLogic
+                    first.logics.append(cls(first, unit, mocks))
                 continue
             demo_cfg = unit.cfg.get("demo") or {}
             if not unit.link.points and not demo_cfg.get("writes") and not demo_cfg.get("logic"):

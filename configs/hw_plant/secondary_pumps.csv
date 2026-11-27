@@ -1,0 +1,4 @@
+tag,controller_device,design_gpm,design_head_ft,motor_hp,ct_range_amps,description
+SHWP-1,242002,600,80,20,50,Secondary HW pump (headered)
+SHWP-2,242002,600,80,20,50,Secondary HW pump (headered)
+SHWP-3,242002,600,80,20,50,Secondary HW pump (headered)

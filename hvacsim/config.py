@@ -149,7 +149,7 @@ def _number(text: str) -> Any:
             return text
 
 
-PLANT_SCHEDULES = ("chillers", "primary_pumps", "secondary_pumps", "condenser_pumps",
+PLANT_SCHEDULES = ("chillers", "boilers", "primary_pumps", "secondary_pumps", "condenser_pumps",
                    "cooling_towers", "tanks", "branches")
 
 
@@ -192,10 +192,10 @@ def expand_plant(merged: Dict[str, Any], base_dir: Path) -> None:
         layout["header_sensors"] = plant["header_sensors"]
     merged["plant_layout"] = layout
     devices = []
-    for c in layout.get("chillers") or []:
+    for c in (layout.get("chillers") or []) + (layout.get("boilers") or []):
         for k in ("sim_device", "mac"):
             if k not in c:
-                raise ConfigError(f"{merged.get('name')}: chiller {c.get('tag')} needs {k} (its BACnet device)")
+                raise ConfigError(f"{merged.get('name')}: {c.get('tag')} needs {k} (its BACnet device)")
         devices.append({"name": str(c["tag"]), "device_instance": int(c["sim_device"]), "mac": int(c["mac"])})
     for ctl, d in (plant.get("io_devices") or {}).items():
         devices.append({"name": f"{merged.get('name')}-IO-{ctl}", "device_instance": int(d["device_instance"]),

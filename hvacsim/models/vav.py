@@ -53,6 +53,7 @@ class VavReheat(EquipmentModel):
         "sa_temp": 55.0,
         "sa_rh": 85.0,
         "hw_supply_temp": 140.0,
+        "hw_dp_pct": 100.0,             # HW branch DP, % of design (set by a hw_plant)
         "oat": 50.0,                   # follows the weather station
         "occ_days": "mon-fri",
         "occ_start": 6.0,
@@ -272,7 +273,8 @@ class VavReheat(EquipmentModel):
             self.q = getattr(self, "_q_from_ahu", 0.0)
             t_sa, w_sa = ahu.t_sa, ahu.w_sa
             co2_sa = getattr(ahu, "co2_sa", 450.0)
-            hw_t = ahu.p["hw_supply_temp"]
+            hw_src = p if getattr(self, "hw_plant", None) is not None else ahu.p
+            hw_t = hw_src["hw_supply_temp"]
             hw_ok = not ahu.fault("hw_plant_off")
         else:
             self.p_in = p["inlet_static"]
@@ -288,7 +290,7 @@ class VavReheat(EquipmentModel):
         # reheat coil
         leak = self.fault_value("valve_leaking") / 100.0 if self.fault("valve_leaking") else 0.0
         frac = max(equal_percentage(vpos), leak)
-        gpm = p["reheat_gpm"] * frac if hw_ok else 0.0
+        gpm = p["reheat_gpm"] * frac * math.sqrt(max(0.0, p["hw_dp_pct"]) / 100.0) if hw_ok else 0.0
         if self.fault("coil_air_bound"):
             gpm *= 0.01                     # air in the coil: almost no circulation
         t_dat, w_dat = self.coil.step(h, max(q, 0.0), self.t_in, w_sa, hw_t, gpm, pa)

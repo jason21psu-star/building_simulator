@@ -1,0 +1,4 @@
+tag,sim_device,mac,controller_device,input_mbh,design_gpm,min_flow_gpm,turndown,hx_dp_ft,description
+B-1,4010051,51,242001,4000,400,120,25,15,Lochinvar Crest FBN4001 condensing boiler
+B-2,4010052,52,242001,4000,400,120,25,15,Lochinvar Crest FBN4001 condensing boiler
+B-3,4010053,53,242001,4000,400,120,25,15,Lochinvar Crest FBN4001 condensing boiler
