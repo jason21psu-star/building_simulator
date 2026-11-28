@@ -4,6 +4,18 @@
   const f1 = v => (v == null || isNaN(v) ? '—' : Number(v).toFixed(1));
   const pill = (txt, cls) => `<span class="pill ${cls || ''}">${txt}</span>`;
   const btn = (action, label) => `<button onclick="keypad('${action}')">${label}</button>`;
+  // vendor-neutral equipment rows (docs/EQUIPMENT_INTERFACE_DESIGN.md, section 7): each unit publishes
+  // pre.view = {short, protocol, integration, text, state, codes, fields, panel, common}
+  const vview = (g, p) => { try { return JSON.parse(g[p + '.view'] || '{}'); } catch (e) { return {}; } };
+  const vcls = st => ({ lockout: 'err', no_power: 'err', alarm: 'warn', running: 'on', starting: 'warn', stopping: 'warn' })[st] || '';
+  const vheading = (views, noun) => {
+    const names = [...new Set(views.map(v => v.short).filter(Boolean))];
+    const protos = [...new Set(views.map(v => ({ bacnet: 'BACnet', modbus_tcp: 'Modbus TCP' })[v.protocol]).filter(Boolean))];
+    return `${noun} (${names.join(', ') || '—'}${protos.length ? ', ' + protos.join(' + ') : ''})`;
+  };
+  const vstatus = v => `${pill((v.text || '').split(' · ')[0], vcls(v.state))}<div class="muted" style="font-size:12px">${(v.codes || []).join('<br>')}</div>`;
+  const vfields = v => (v.fields || []).map(([k, x]) => `<span class="muted">${k}</span> ${x}`).join('<br>');
+  const vpanel = (p, v) => (v.panel || []).map(([k, label]) => btn(p + '.' + k, label)).join('');
   const POS = {N: 'NORMAL', E: 'EMERGENCY', O: 'OPEN', B: 'BOTH'};
 
   VIEWS.gen_plant = {
@@ -32,7 +44,7 @@
       <div class="kpis" id="gp_kpis"></div>
       <h3>One-line: utility · generator bus · ATSs</h3><div class="oneline" id="gp_ats"></div>
       <h3>Bus frequency (last 5 min)</h3><div id="gp_trend"></div>
-      <h3>Generators (Cummins PowerCommand 3.3, Modbus TCP)</h3><div class="scroll"><table><thead><tr>
+      <h3 id="gp_gens_h">Generators</h3><div class="scroll"><table><thead><tr>
         <th>Set</th><th>Unit ID</th><th>Status</th><th>Switch</th><th>kW · %</th><th>Hz · V · A</th><th>Coolant °F</th>
         <th>Oil psi</th><th>Battery V</th><th>Hours · starts</th><th>Fault</th><th>Control</th></tr></thead><tbody id="gp_gens"></tbody></table></div>
       <h3>Modbus TCP server</h3><div id="gp_mb"></div>
@@ -79,21 +91,23 @@
           <line x1="0" x2="${W}" y1="${y(60)}" y2="${y(60)}" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="4 4"/>
           <line x1="0" x2="${W}" y1="${y(55)}" y2="${y(55)}" stroke="#c0392b" stroke-opacity=".5" stroke-dasharray="4 4"/>
           <polyline points="${pts}" fill="none" stroke="#2f7de1" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
-          <span class="muted">dashed: 60 Hz and the 55 Hz underfrequency trip level · lowest ${f1(Math.min(...tr.filter(v => v > 0)))} Hz</span>`;
+          <span class="muted">dashed: 60 Hz and the 55 Hz underfrequency trip level · ${tr.some(v => v > 0) ? 'lowest ' + f1(Math.min(...tr.filter(v => v > 0))) + ' Hz' : 'bus not energized in this window'}</span>`;
       } else {
         $('gp_trend').innerHTML = '<span class="muted">bus not energized</span>';
       }
 
-      $('gp_gens').innerHTML = (L.generators || []).map(p => {
-        const st = g[p + '.status'] || '';
-        const cls = /SHUTDOWN/.test(st) ? 'err' : /Rated/.test(st) ? 'on' : /Crank|Accel|delay|Cooldown/.test(st) ? 'warn' : '';
+      const gv = (L.generators || []).map(p => vview(g, p));
+      $('gp_gens_h').textContent = vheading(gv, 'Generators');
+      $('gp_gens').innerHTML = (L.generators || []).map((p, i) => {
+        const v = gv[i];
         const fc = g[p + '.fault_code'];
-        return `<tr><td><b>${tag(p)}</b></td><td class="v">${(L.units || {})[p]}</td><td>${pill(st, cls)}</td>
+        return `<tr><td><b>${tag(p)}</b><br><span class="muted">${v.short || ''}</span></td><td class="v">${(L.units || {})[p]}</td>
+          <td>${vstatus(v)}</td>
           <td>${g[p + '.switch']}</td><td class="v">${f0(g[p + '.kw'])} · ${f0(g[p + '.pct'])}%</td>
           <td class="v">${f1(g[p + '.freq'])} · ${f0(g[p + '.volts'])} · ${f0(g[p + '.amps'])}</td>
           <td class="v">${f0(g[p + '.coolant'])}</td><td class="v">${f0(g[p + '.oil'])}</td><td class="v">${f1(g[p + '.battery'])}</td>
-          <td class="v">${f1(g[p + '.hours'])} · ${f0(g[p + '.starts'])}</td><td>${fc ? pill(f0(fc), /SHUTDOWN/.test(st) ? 'err' : 'warn') : ''}</td>
-          <td class="btns">${btn(p + '.off', 'Off')}${btn(p + '.auto', 'Auto')}${btn(p + '.manual', 'Manual')}${btn(p + '.reset', 'Fault reset')}</td></tr>`;
+          <td class="v">${f1(g[p + '.hours'])} · ${f0(g[p + '.starts'])}</td><td>${fc ? pill(f0(fc), v.state === 'lockout' ? 'err' : 'warn') : ''}</td>
+          <td class="btns">${vpanel(p, v)}</td></tr>`;
       }).join('');
 
       const mb = s.modbus;

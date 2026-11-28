@@ -306,6 +306,10 @@ class YorkYK(Chiller):
     def alarm(self) -> bool:
         return bool(self.safety)
 
+    @property
+    def active_setpoint(self) -> float:
+        return self.setpoint
+
     def _safety_cause(self) -> bool:
         if self.safety == 77:
             return "vsd_fault" in self.faults
@@ -649,5 +653,9 @@ class YorkYK(Chiller):
         return out
 
     def view_fields(self) -> list:
-        return [("%FLA", f"{self._pct_fla():.0f} %"), ("Lift", f"{self.lift:.1f} °F"),
+        ar = max(0.0, self.anti_recycle_s - self.since_start) / 60.0 if self.since_start < 1e8 else 0.0
+        out = [("Control", f"{'Remote (ISN)' if self.panel_remote else 'LOCAL'} · switch {'RUN' if self.panel_switch_run else 'STOP'}")]
+        if ar > 0 and not self.running:
+            out.append(("Anti-recycle", f"{ar:.0f} min"))
+        return out + [("%FLA", f"{self._pct_fla():.0f} %"), ("Lift", f"{self.lift:.1f} °F"),
                 ("PRV", f"{self.prv:.0f} %"), ("VSD", f"{self.speed * 60.0:.1f} Hz" if self.running else "0 Hz")]

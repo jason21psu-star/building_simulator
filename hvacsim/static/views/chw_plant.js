@@ -6,6 +6,18 @@
     return `rgb(${l(40, 225)},${l(110, 80)},${l(230, 50)})`; };
   const pill = (txt, cls) => `<span class="pill ${cls || ''}">${txt}</span>`;
   const btn = (action, label, value) => `<button onclick="keypad('${action}'${value !== undefined ? ',' + JSON.stringify(value) : ''})">${label}</button>`;
+  // vendor-neutral equipment rows (docs/EQUIPMENT_INTERFACE_DESIGN.md, section 7): each unit publishes
+  // pre.view = {short, protocol, integration, text, state, codes, fields, panel, common}
+  const vview = (g, p) => { try { return JSON.parse(g[p + '.view'] || '{}'); } catch (e) { return {}; } };
+  const vcls = st => ({ lockout: 'err', no_power: 'err', alarm: 'warn', running: 'on', starting: 'warn', stopping: 'warn' })[st] || '';
+  const vheading = (views, noun) => {
+    const names = [...new Set(views.map(v => v.short).filter(Boolean))];
+    const protos = [...new Set(views.map(v => ({ bacnet: 'BACnet', modbus_tcp: 'Modbus TCP' })[v.protocol]).filter(Boolean))];
+    return `${noun} (${names.join(', ') || '—'}${protos.length ? ', ' + protos.join(' + ') : ''})`;
+  };
+  const vstatus = v => `${pill((v.text || '').split(' · ')[0], vcls(v.state))}<div class="muted" style="font-size:12px">${(v.codes || []).join('<br>')}</div>`;
+  const vfields = v => (v.fields || []).map(([k, x]) => `<span class="muted">${k}</span> ${x}`).join('<br>');
+  const vpanel = (p, v) => (v.panel || []).map(([k, label]) => btn(p + '.' + k, label)).join('');
   const vpos = (g, base) => { const p = g[base + '.pos']; return `<span title="${base}">${p >= 98 ? '▮' : p <= 2 ? '▯' : '◧'} ${f0(p)}%</span>`; };
 
   VIEWS.chw_plant = {
@@ -29,9 +41,9 @@
     <div class="cp">
       <div class="power" id="cp_power"></div>
       <div class="kpis" id="cp_kpis"></div>
-      <h3>Chillers (YORK YK, BACnet)</h3><div class="scroll"><table><thead><tr>
-        <th>Chiller</th><th>Panel status</th><th>LCHWT / ECHWT</th><th>SP</th><th>Tons</th><th>%FLA · kW</th><th>kW/t</th>
-        <th>Evap · Cond gpm</th><th>Lift</th><th>CHW · CW valve</th><th>Panel</th></tr></thead><tbody id="cp_ch"></tbody></table></div>
+      <h3 id="cp_ch_h">Chillers</h3><div class="scroll"><table><thead><tr>
+        <th>Chiller</th><th>Panel status</th><th>LCHWT / ECHWT</th><th>SP</th><th>Tons</th><th>kW</th><th>kW/t</th>
+        <th>Evap · Cond gpm</th><th>Vendor</th><th>CHW · CW valve</th><th>Panel</th></tr></thead><tbody id="cp_ch"></tbody></table></div>
       <h3>Pumps (ACH580, hardwired)</h3><div class="scroll"><table><thead><tr>
         <th>Pump</th><th>Drive</th><th>Hz</th><th>gpm</th><th>Head ft</th><th>Amps</th><th>Keypad</th></tr></thead><tbody id="cp_pumps"></tbody></table></div>
       <h3>Cooling towers</h3><div class="scroll"><table><thead><tr>
@@ -65,19 +77,19 @@
         kpi(f1(g.schwr_temp) + '°F', 'secondary return'), kpi(f1(g.plant_dp) + ' psi', 'plant DP'),
         kpi(f0(g.cw_flow) + ' gpm', `CW · supply ${f1(g.cws_actual)}°F`)].join('');
 
-      $('cp_ch').innerHTML = (L.chillers || []).map(c => {
-        const st = g[c + '.status'] || '';
-        const cls = /SAFETY/.test(st) ? 'err' : /Running/.test(st) ? 'on' : '';
-        return `<tr><td><b>${tag(c)}</b><br><span class="muted">${g[c + '.control_source'] ? 'Remote (ISN)' : 'LOCAL'} · switch ${g[c + '.panel_switch_run'] ? 'RUN' : 'STOP'}</span></td>
-          <td class="st">${pill(st.split(' · ')[0], cls)}<div class="muted" style="font-size:12px">${st.split(' · ').slice(1).join(' · ')}</div>
-            ${g[c + '.anti_recycle'] > 0 ? `<span class="muted">anti-recycle ${f0(g[c + '.anti_recycle'])} min</span>` : ''}</td>
-          <td class="v">${f1(g[c + '.lchwt'])} / ${f1(g[c + '.echwt'])}</td><td class="v">${f1(g[c + '.active_sp'])}</td>
-          <td class="v">${f0(g[c + '.tons'])}</td><td class="v">${f0(g[c + '.pct_fla'])}% · ${f0(g[c + '.kw'])}</td>
+      const chv = (L.chillers || []).map(c => vview(g, c));
+      $('cp_ch_h').textContent = vheading(chv, 'Chillers');
+      $('cp_ch').innerHTML = (L.chillers || []).map((c, i) => {
+        const v = chv[i], m = v.common || {};
+        return `<tr><td><b>${tag(c)}</b><br><span class="muted">${v.short || ''}</span></td>
+          <td class="st">${vstatus(v)}</td>
+          <td class="v">${f1(m.lchwt)} / ${f1(m.echwt)}</td><td class="v">${f1(m.sp)}</td>
+          <td class="v">${f0(g[c + '.tons'])}</td><td class="v">${f0(m.kw)}</td>
           <td class="v">${g[c + '.kw_per_ton'] ? Number(g[c + '.kw_per_ton']).toFixed(2) : '—'}</td>
           <td class="v">${f0(g[c + '_chw_flow'])} · ${f0(g[c + '_cw_flow'])}</td>
-          <td class="v">${f1(g[c + '.cond_sat'] - g[c + '.evap_sat'])}°F<br><span class="muted">${f0(g[c + '.evap_p'])}/${f0(g[c + '.cond_p'])} psig</span></td>
+          <td style="font-size:12px">${vfields(v)}</td>
           <td>${vpos(g, c + '_chw_vlv')} · ${vpos(g, c + '_cw_vlv')}</td>
-          <td class="btns">${btn(c + '.remote', 'Remote')}${btn(c + '.local', 'Local')}${btn(c + '.run', 'Run')}${btn(c + '.stop', 'Stop')}${btn(c + '.reset', 'Reset')}</td></tr>`;
+          <td class="btns">${vpanel(c, v)}</td></tr>`;
       }).join('');
 
       const pumpRow = p => {
@@ -118,8 +130,9 @@
         <td class="v">${f0(g[b + '.flow'])}</td><td class="v">${f0(g[b + '.valve'])}%</td>
         <td class="v">${f1(g[b + '_chw_remote_dp'])}</td><td class="v">${f1(g[b + '.rwt'])}</td><td class="v">${f0(g[b + '.ahu_flow'])}</td></tr>`).join('');
 
+      const devView = d => vview(g, Object.keys(L.tags || {}).find(k => L.tags[k] === d.name) || '');
       $('cp_dev').innerHTML = (s.devices || []).map(d => `<tr><td><b>${d.name}</b></td><td>device ${d.device_instance} · ${d.address}</td>
-        <td>${d.kind === 'chiller' ? 'YORK OptiView BAS objects' : 'I/O for ALC ' + d.controller} · ${d.objects} objects</td>
+        <td>${d.kind === 'chiller' ? (devView(d).integration || 'chiller BAS objects') : 'I/O for ALC ' + d.controller} · ${d.objects} objects</td>
         <td>${d.offline ? pill('OFFLINE', 'err') : pill('online', 'on')}</td></tr>`).join('') +
         (s.controllers || []).map(c => `<tr><td>ALC ${c.device_instance}</td><td colspan="2" class="muted">${c.status}</td>
         <td>${c.ok === c.points ? pill(c.ok + '/' + c.points + ' writes OK', 'on') : pill(c.ok + '/' + c.points + ' writes OK', 'err')}</td></tr>`).join('');

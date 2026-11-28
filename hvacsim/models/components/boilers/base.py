@@ -80,6 +80,10 @@ class Boiler(BoilerCore, VendorEquipment):
     def pump_request(self) -> bool:
         raise NotImplementedError
 
+    def flow_switch(self) -> bool:
+        """The boiler's own flow switch, as its control sees it."""
+        raise NotImplementedError
+
 
 def boiler_class(model: str) -> Type[Boiler]:
     return family_class("boiler", model)  # type: ignore[return-value]

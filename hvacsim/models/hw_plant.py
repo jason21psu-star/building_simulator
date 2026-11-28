@@ -776,7 +776,10 @@ class HwPlant(EquipmentModel):
             for key, val in c.points().items():
                 s[f"{pre}.{key}"] = val
             s[f"{pre}.status"] = c.status_text()
-            s[f"{pre}.view"] = json.dumps(c.view())
+            s[f"{pre}.view"] = json.dumps({**c.view(), "common": {
+                "firing": round(100.0 * c.rate, 1) if c.flame else 0.0, "supply": c.role("supply_t"),
+                "return": c.role("return_t"), "flame": c.flame, "flow_switch": c.flow_switch(),
+                "alarm": c.alarm}})
             s[f"{pre}_alarm"] = bool(c.alarm)
             s[f"{pre}.flow"] = round(b["q"], 0)
             s[f"{pre}.mbh_out"] = round(c.q / 1000.0, 0)

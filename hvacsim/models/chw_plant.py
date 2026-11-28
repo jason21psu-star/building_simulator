@@ -997,7 +997,9 @@ class ChwPlant(EquipmentModel):
             for key, val in u.points().items():
                 s[f"{pre}.{key}"] = val
             s[f"{pre}.status"] = u.status_text()
-            s[f"{pre}.view"] = json.dumps(u.view())
+            s[f"{pre}.view"] = json.dumps({**u.view(), "common": {
+                "lchwt": round(u.lchwt, 1), "echwt": round(u.echwt, 1), "sp": round(u.active_setpoint, 1),
+                "kw": round(u.kw, 0), "running": u.running, "alarm": u.alarm}})
             tons = u.q / 12000.0
             s[f"{pre}.tons"] = round(tons, 0)
             s[f"{pre}.kw_per_ton"] = round(u.kw / tons, 3) if tons > 10 else 0.0

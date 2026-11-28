@@ -1,7 +1,7 @@
 # Natural gas generator plant: physical design (for review)
 
 Status: **built** as equipment type `gen_plant`:
-- model `hvacsim/models/gen_plant.py`, genset `hvacsim/models/components/pcc.py`;
+- model `hvacsim/models/gen_plant.py`, genset `hvacsim/models/components/gensets/cummins_pcc33.py` (behind the genset interface, [EQUIPMENT_INTERFACE_DESIGN.md](EQUIPMENT_INTERFACE_DESIGN.md));
 - Modbus TCP server `hvacsim/modbus_tcp.py`;
 - template `configs/templates/gen_plant.yaml`, schedules `configs/gen_plant/*.csv`.
 

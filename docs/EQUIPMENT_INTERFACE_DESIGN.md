@@ -1,6 +1,7 @@
 # Chiller, boiler and generator interfaces: design (for review)
 
-Status: **for review, nothing built.** This is step 2 of the modularization
+Status: **built** (build steps 1-6 in section 11). Step 7, the second vendor
+in each family, waits for its manuals. This is step 2 of the modularization
 plan:
 1. Drive interface: built ([DRIVE_INTERFACE_DESIGN.md](DRIVE_INTERFACE_DESIGN.md)).
 2. **Vendor interfaces for chillers, boilers and generators: this document.**
@@ -11,8 +12,41 @@ It follows the drive interface: one interface per equipment family, with
 today's vendors moved behind it unchanged and protected by golden traces. A
 second vendor is then one new file that passes the family's conformance tests.
 
-Values not taken from a manual are marked *(A)*. Proposed defaults for the
-review questions are in section 10.
+Values not taken from a manual are marked *(A)*. The review questions in
+section 10 were all built with their proposed defaults.
+
+| Part | Where |
+|---|---|
+| Shared interface, registry, BACnet / Modbus builder | `hvacsim/models/components/vendor.py` |
+| Families | `components/chillers/`, `components/boilers/`, `components/gensets/` (each `base.py`, `core.py`, vendor files) |
+| Golden traces | `tests/golden/` (new: `chiller_vendor`, `boiler_vendor`, `gen_plant`) |
+| Conformance tests | `tests/test_vendors.py` |
+
+**As built: details this design left open**
+- **Generic status:** a vendor's generic state is `generic_state()`, because
+  the vendors already use `state` for their own sequence state.
+- **Generic Modbus encoding:**
+  - A Modbus vendor lists its registers in `OBJECTS`, with an optional
+    seventh element for the scale. Values are 16-bit two's complement.
+  - A vendor with 32-bit values or other encodings overrides
+    `modbus_registers()` / `modbus_write()`. The Cummins does, so its register
+    image is unchanged.
+  - Genset read roles are decoded from registers by `decode(role, regs)`. This
+    is how the demo logic reads "at rated" over Modbus without knowing the
+    vendor.
+- **Modbus ports:** the chilled and hot water plants' Modbus servers default
+  to ports 5021 and 5022, and `plant.modbus.port` overrides them. The
+  generator plant stays on 502.
+- **Web page data:** each unit publishes `pre.view`, a JSON of its status,
+  codes, vendor fields, panel keys and the common values. The plant pages
+  draw from it.
+- **Golden traces** are stored gzip-compressed (`*.json.gz`).
+- **Bug fixed while recording the `gen_plant` trace:** a shed ATS whose load
+  was bigger than the spare generator capacity never returned to normal when
+  utility came back. Shed ATSs now go back to normal as soon as utility
+  returns.
+- **Lochinvar Crest BMS modes:** only `rate` *(A)*. Its object list has no
+  remote setpoint object.
 
 ## 1. Goal
 

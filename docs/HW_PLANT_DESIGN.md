@@ -1,7 +1,7 @@
 # Hot water plant simulator: physical design (for review)
 
 Status: **built** as equipment type `hw_plant` (model
-`hvacsim/models/hw_plant.py`, boiler `hvacsim/models/components/crest.py`,
+`hvacsim/models/hw_plant.py`, boiler `hvacsim/models/components/boilers/lochinvar_crest.py` (behind the boiler interface, [EQUIPMENT_INTERFACE_DESIGN.md](EQUIPMENT_INTERFACE_DESIGN.md)),
 template `configs/templates/hw_plant.yaml`, schedules `configs/hw_plant/*.csv`).
 This records the 11 design questions answered in review; section 14
 describes how each part is simulated.
@@ -266,7 +266,7 @@ All object definitions are in one table, so real Lochinvar names and instance nu
   supply short-circuiting through the decoupler. The secondary supply mixes
   primary supply with any return water coming through the decoupler the other
   way. The return lags by the loop volume (15,000 gal).
-- **Boiler** (`components/crest.py`): the sequence, limits and codes of
+- **Boiler** (`components/boilers/lochinvar_crest.py`): the sequence, limits and codes of
   section 2. A no-flow hot spot at the high limit well makes the manual-reset
   high limit trip when a boiler fires without flow (stuck flow switch).
   Efficiency follows return temperature; flue temperature and condensate

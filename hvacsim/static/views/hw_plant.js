@@ -4,6 +4,18 @@
   const f1 = v => (v == null || isNaN(v) ? '—' : Number(v).toFixed(1));
   const pill = (txt, cls) => `<span class="pill ${cls || ''}">${txt}</span>`;
   const btn = (action, label, value) => `<button onclick="keypad('${action}'${value !== undefined ? ',' + JSON.stringify(value) : ''})">${label}</button>`;
+  // vendor-neutral equipment rows (docs/EQUIPMENT_INTERFACE_DESIGN.md, section 7): each unit publishes
+  // pre.view = {short, protocol, integration, text, state, codes, fields, panel, common}
+  const vview = (g, p) => { try { return JSON.parse(g[p + '.view'] || '{}'); } catch (e) { return {}; } };
+  const vcls = st => ({ lockout: 'err', no_power: 'err', alarm: 'warn', running: 'on', starting: 'warn', stopping: 'warn' })[st] || '';
+  const vheading = (views, noun) => {
+    const names = [...new Set(views.map(v => v.short).filter(Boolean))];
+    const protos = [...new Set(views.map(v => ({ bacnet: 'BACnet', modbus_tcp: 'Modbus TCP' })[v.protocol]).filter(Boolean))];
+    return `${noun} (${names.join(', ') || '—'}${protos.length ? ', ' + protos.join(' + ') : ''})`;
+  };
+  const vstatus = v => `${pill((v.text || '').split(' · ')[0], vcls(v.state))}<div class="muted" style="font-size:12px">${(v.codes || []).join('<br>')}</div>`;
+  const vfields = v => (v.fields || []).map(([k, x]) => `<span class="muted">${k}</span> ${x}`).join('<br>');
+  const vpanel = (p, v) => (v.panel || []).map(([k, label]) => btn(p + '.' + k, label)).join('');
 
   VIEWS.hw_plant = {
     wide: true,
@@ -26,9 +38,9 @@
     <div class="hp">
       <div class="power" id="hp_power"></div>
       <div class="kpis" id="hp_kpis"></div>
-      <h3>Boilers (Lochinvar Crest, BMS)</h3><div class="scroll"><table><thead><tr>
-        <th>Boiler</th><th>Display status</th><th>Firing</th><th>Supply / return °F</th><th>Flue °F</th><th>MBH out</th>
-        <th>Eff.</th><th>gpm · flow sw</th><th>Flame µA</th><th>Hours · cycles</th><th>Display</th></tr></thead><tbody id="hp_b"></tbody></table></div>
+      <h3 id="hp_b_h">Boilers</h3><div class="scroll"><table><thead><tr>
+        <th>Boiler</th><th>Display status</th><th>Firing</th><th>Supply / return °F</th><th>MBH out</th>
+        <th>gpm · flow sw</th><th>Vendor</th><th>Display</th></tr></thead><tbody id="hp_b"></tbody></table></div>
       <h3>Pumps (ACH580, hardwired)</h3><div class="scroll"><table><thead><tr>
         <th>Pump</th><th>Drive</th><th>Hz</th><th>gpm</th><th>Head ft</th><th>Amps</th><th>Keypad</th></tr></thead><tbody id="hp_pumps"></tbody></table></div>
       <h3>Decoupler and loop</h3><div id="hp_dec"></div>
@@ -61,18 +73,19 @@
         kpi(f1(g.phwr_actual) + ' / ' + f1(g.shwr_actual) + '°F', 'primary / secondary return'),
         kpi(f1(g.plant_dp) + ' psi', 'plant DP'), kpi(f0(g.plant_kw) + ' kW', 'pump power')].join('');
 
-      $('hp_b').innerHTML = (L.boilers || []).map(b => {
-        const st = g[b + '.status'] || '';
-        const cls = /Lockout|NO POWER/.test(st) ? 'err' : /Blocked/.test(st) ? 'warn' : /Running|Low fire|Ignition|purge/.test(st) ? 'on' : '';
-        const rate = g[b + '.firing_rate'] || 0;
-        return `<tr><td><b>${tag(b)}</b><br><span class="muted">${g[b + '.bms_mode'] ? 'BMS' : 'LOCAL'}</span></td>
-          <td class="st">${pill(st.split(' · ')[0], cls)}<div class="muted" style="font-size:12px">${st.split(' · ').slice(1).join(' · ')}</div></td>
+      const bv = (L.boilers || []).map(b => vview(g, b));
+      $('hp_b_h').textContent = vheading(bv, 'Boilers');
+      $('hp_b').innerHTML = (L.boilers || []).map((b, i) => {
+        const v = bv[i], m = v.common || {};
+        const rate = m.firing || 0;
+        return `<tr><td><b>${tag(b)}</b><br><span class="muted">${v.short || ''}${v.state === 'local' ? ' · LOCAL' : ''}</span></td>
+          <td class="st">${vstatus(v)}</td>
           <td class="v"><span class="flame"><div style="width:${Math.min(100, rate)}%"></div></span> ${f0(rate)}%</td>
-          <td class="v">${f1(g[b + '.supply_temp'])} / ${f1(g[b + '.return_temp'])}</td><td class="v">${f0(g[b + '.flue_temp'])}</td>
-          <td class="v">${f0(g[b + '.mbh_out'])}</td><td class="v">${g[b + '.efficiency'] ? f1(g[b + '.efficiency']) + '%' : '—'}</td>
-          <td class="v">${f0(g[b + '.flow'])} · ${g[b + '.flow_switch'] ? pill('made', 'on') : pill('open')}</td>
-          <td class="v">${f1(g[b + '.flame_signal'])}</td><td class="v">${f1(g[b + '.run_hours'])} · ${f0(g[b + '.cycles'])}</td>
-          <td class="btns">${btn(b + '.bms', 'BMS')}${btn(b + '.local', 'Local')}${btn(b + '.reset', 'Reset')}</td></tr>`;
+          <td class="v">${f1(m.supply)} / ${f1(m.return)}</td>
+          <td class="v">${f0(g[b + '.mbh_out'])}</td>
+          <td class="v">${f0(g[b + '.flow'])} · ${m.flow_switch ? pill('made', 'on') : pill('open')}</td>
+          <td style="font-size:12px">${vfields(v)}</td>
+          <td class="btns">${vpanel(b, v)}</td></tr>`;
       }).join('');
 
       const pumpRow = p => {
@@ -100,8 +113,9 @@
         <td class="v">${f1(g[b + '_hw_eob_temp'])}</td><td class="v">${f0(g[b + '.eob_pos'])}% · ${f1(g[b + '.eob_flow'])} gpm</td>
         <td class="v">${f1(g[b + '.conn_flow'])} <span class="muted">${(L.connected || []).filter(c => c.branch === tag(b)).map(c => c.name).join(', ')}</span></td></tr>`).join('');
 
+      const devView = d => vview(g, Object.keys(L.tags || {}).find(k => L.tags[k] === d.name) || '');
       $('hp_dev').innerHTML = (s.devices || []).map(d => `<tr><td><b>${d.name}</b></td><td>device ${d.device_instance} · ${d.address}</td>
-        <td>${d.kind === 'boiler' ? 'Crest BMS objects (assumed names)' : 'I/O for ALC ' + d.controller} · ${d.objects} objects</td>
+        <td>${d.kind === 'boiler' ? (devView(d).integration || 'boiler BMS objects') : 'I/O for ALC ' + d.controller} · ${d.objects} objects</td>
         <td>${d.offline ? pill('OFFLINE', 'err') : pill('online', 'on')}</td></tr>`).join('') +
         (s.controllers || []).map(c => `<tr><td>ALC ${c.device_instance}</td><td colspan="2" class="muted">${c.status}</td>
         <td>${c.ok === c.points ? pill(c.ok + '/' + c.points + ' writes OK', 'on') : pill(c.ok + '/' + c.points + ' writes OK', 'err')}</td></tr>`).join('');

@@ -131,6 +131,7 @@ class Genset(GeneratorSet):
              "at_rated": "seq_state", "kw": "kw", "hz": "hz", "volts": "v_ll", "shutdown": "fault_type",
              "warning": "fault_type", "in_auto": "switch", "fault_code": "fault_code"}
     PANEL = ["off", "auto", "manual", "reset"]
+    PANEL_LABELS = {"reset": "Fault reset"}
     FAULTS = PCC_FAULTS
     EVENT_CODES = EVENT_CODES
     CODE_TABLES = {"fault": {c: t[0] for c, t in FAULT_CODES.items()}, "sequence": SEQ_TEXT, "switch": SWITCH_TEXT}

@@ -422,6 +422,51 @@ It must pass the conformance tests in `tests/test_drives.py`, which run against
 every registered drive. `tests/test_golden.py` replays recorded traces, so
 refactoring can't silently change drive behaviour.
 
+## Chillers, boilers and generators: choosing the make and model
+
+Each chiller, boiler and generator set sits behind its family's interface
+([docs/EQUIPMENT_INTERFACE_DESIGN.md](docs/EQUIPMENT_INTERFACE_DESIGN.md)).
+The `model` column in the plant CSV picks the vendor, row by row:
+
+| Plant | CSV | Registered models (default first) |
+|---|---|---|
+| Chilled water | `chillers.csv` | `york_yk` |
+| Hot water | `boilers.csv` | `lochinvar_crest` |
+| Generator | `generators.csv` | `cummins_pcc33` |
+
+**What a swap changes:**
+- the equipment's controller: its sequence, panel keys, status texts and
+  fault codes;
+- its integration, i.e. the object list or register map the trainees map in
+  the ALC, and the protocol. A Modbus vendor in the chilled or hot water plant
+  gets that plant's own Modbus TCP server (port 5021 / 5022 unless
+  `plant.modbus.port`), with a `unit_id` column on its row.
+
+**What a swap doesn't change:**
+- the plant's physics, because every vendor in a family shares the same
+  thermal or engine core;
+- every hardwired ALC point (valves, flow meters, drives, louver, ATSs).
+
+**Vendor settings:**
+- Set them with the vendor's own names under `chiller:`, `boiler:` or
+  `genset:` in the plant template's settings, flat or per model, e.g.
+  `chiller: { york_yk: { anti_recycle_min: 15 } }`. A same-named CSV column
+  works too.
+- The boiler plant's `boiler_bms_mode` is `rate` (enable + firing rate) or
+  `setpoint`, if the vendor supports it.
+
+**Instructor faults:**
+- Each vendor keeps its own fault names (`ch1_vsd_fault`,
+  `b1_gateway_offline`).
+- Every family also has generic names that work on any vendor (`ch1_starter_fault`,
+  `b1_comm_loss`).
+
+**Adding a vendor:**
+- One file in `models/components/chillers/`, `boilers/` or `gensets/`.
+- It must pass `tests/test_vendors.py`, which runs against every registered
+  vendor.
+- The golden traces (`tests/test_golden.py`) protect the existing vendors.
+
 ## Code layout
 
 ```
@@ -436,13 +481,14 @@ hvacsim/
   models/ahu.py          VAV AHU (fan array, coils, safeties, duct with VAV boxes)
   models/vav.py          VAV box with reheat and its zone
   models/chw_plant.py    Chilled water plant (hydraulics, TES, towers, building risers)
-  models/components/york_yk.py   YORK YK chiller + OptiView BAS object list / status codes
+  models/components/vendor.py    Shared vendor interface, registry, BACnet / Modbus integration builder
+  models/components/chillers/    Chiller interface, shared thermal core, york_yk.py (YORK YK + OptiView objects)
   models/components/hydronic.py  Pumps, isolation valves, pump/system solves, stratified tank, R-134a
   models/components/tower.py     Cooling tower cell with basin
   models/hw_plant.py     Hot water plant (boilers, primary/secondary, decoupler, branches)
-  models/components/crest.py     Lochinvar Crest boiler + BMS object list / codes (assumed)
+  models/components/boilers/     Boiler interface, shared HX core, lochinvar_crest.py (Crest + BMS objects, assumed)
   models/gen_plant.py    Generator plant: paralleling master, ATSs, bus, load shedding, power to instances
-  models/components/pcc.py       Cummins genset + PowerCommand 3.x register image / fault codes
+  models/components/gensets/     Genset interface, shared engine core, cummins_pcc33.py (PowerCommand 3.3 registers)
   modbus_tcp.py          Modbus TCP server (gateway with unit IDs) and client
   plant_runner.py        A plant = several BACnet devices (chillers / boilers + I/O devices) on one model
   models/components/airside.py  Actuators, valves, dampers, water coils, steam humidifier

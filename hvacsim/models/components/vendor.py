@@ -203,7 +203,8 @@ class VendorEquipment:
 
     def view(self) -> Dict[str, Any]:
         """Everything the plant page shows for this unit, vendor-neutral."""
-        return {"model": self.MODEL, "short": self.SHORT, **self.status(),
+        return {"model": self.MODEL, "short": self.SHORT, "display": self.DISPLAY, "protocol": self.PROTOCOL,
+                "integration": self.INTEGRATION, **self.status(),
                 "fields": [list(f) for f in self.view_fields()],
                 "panel": [[k, self.PANEL_LABELS.get(k, k.title())] for k in self.PANEL]}
 

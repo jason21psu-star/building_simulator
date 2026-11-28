@@ -44,6 +44,11 @@ class Chiller(ChillerCore, VendorEquipment):
         raise NotImplementedError
 
     @property
+    def active_setpoint(self) -> float:
+        """The leaving chilled water setpoint the chiller is controlling to (remote or local)."""
+        raise NotImplementedError
+
+    @property
     def alarm(self) -> bool:
         """A shutdown that needs attention (latched safety / lockout)."""
         raise NotImplementedError
