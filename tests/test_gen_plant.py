@@ -300,8 +300,9 @@ async def _demo():
 
 def test_shed_load_returns_to_normal_when_utility_returns():
     # a shed load bigger than the spare generator capacity must still come back on utility
-    m = plant(building_kw_occ=3800.0)
-    m.gens[3]["gen"].set_switch(0)
+    m = plant(building_kw_occ=2500.0)
+    for g in m.gens[2:]:
+        g["gen"].set_switch(0)                                 # only 2 sets available
     m.set_utility(False)
     run(m, 60)
     assert ats(m, "ATS-4")["shed"]
