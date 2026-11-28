@@ -296,3 +296,16 @@ async def _demo():
     finally:
         task.cancel()
         host.close()
+
+
+def test_shed_load_returns_to_normal_when_utility_returns():
+    # a shed load bigger than the spare generator capacity must still come back on utility
+    m = plant(building_kw_occ=3800.0)
+    m.gens[3]["gen"].set_switch(0)
+    m.set_utility(False)
+    run(m, 60)
+    assert ats(m, "ATS-4")["shed"]
+    m.set_utility(True)
+    run(m, 5)
+    assert ats(m, "ATS-4")["pos"] == "N" and not ats(m, "ATS-4")["shed"]
+    assert m.shed_level == 0

@@ -1,18 +1,15 @@
 """
-Golden traces: today's drive behaviour must not change when the drives are
-refactored (docs/DRIVE_INTERFACE_DESIGN.md, section 4).  Scenarios live in
-tests/golden/scenarios.py; the recorded traces in tests/golden/*.json.
+Golden traces: today's behaviour must not change when the drives and the
+vendor equipment are refactored (docs/DRIVE_INTERFACE_DESIGN.md, section 4;
+docs/EQUIPMENT_INTERFACE_DESIGN.md, section 8).  Scenarios live in
+tests/golden/scenarios.py; the recorded traces in tests/golden/*.json.gz.
 """
 
-import json
 import math
-from pathlib import Path
 
 import pytest
 
-from tests.golden.scenarios import SCENARIOS
-
-HERE = Path(__file__).parent / "golden"
+from tests.golden.scenarios import SCENARIOS, load
 
 
 def _diff(a, b, path=""):
@@ -27,7 +24,7 @@ def _diff(a, b, path=""):
 
 @pytest.mark.parametrize("name", list(SCENARIOS))
 def test_golden_trace(name):
-    recorded = json.loads((HERE / f"{name}.json").read_text())
+    recorded = load(name)
     now = SCENARIOS[name]()
     assert len(now) == len(recorded), f"{name}: {len(recorded)} snapshots recorded, {len(now)} now"
     problems = []

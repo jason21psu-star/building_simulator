@@ -501,21 +501,23 @@ class GenPlant(EquipmentModel):
             self._under_s = 0.0
         # restore shed loads one at a time when there is room
         shed = [a for a in self.ats if a["shed"]]
-        if shed and online:
+        if shed and u:
+            # utility back: a shed ATS's normal source is live, so it goes straight back to normal
+            for a in shed:
+                a["shed"], a["pos"] = False, "N"
+            self.shed_level = 0
+            self._restore_s = 0.0
+        elif shed and online:
             a = min(shed, key=lambda x: int(x["shed_order"]))
             if cap - e_kw > 1.2 * max(a["kw_shed"], 50.0):
                 self._restore_s += h
                 if self._restore_s >= 30.0:
                     a["shed"] = False
-                    a["pos"] = "E" if not u else "N"
+                    a["pos"] = "E"
                     self.shed_level = max(0, self.shed_level - 1)
                     self._restore_s = 0.0
             else:
                 self._restore_s = 0.0
-        elif shed and u:
-            for a in shed:
-                a["shed"], a["pos"] = False, "N"
-            self.shed_level = 0
 
         # ---------------- ATSs ----------------
         bus_ok = bool(online) and self.bus_f > 57.0 and self.bus_v > 430.0
