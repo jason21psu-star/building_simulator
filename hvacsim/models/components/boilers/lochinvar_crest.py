@@ -463,6 +463,8 @@ class CrestBoiler(Boiler):
     def points(self) -> Dict[str, Any]:
         status = 9 if (self.local and self.state in (0, 6)) else self.state
         return {
+            "bms_enable": bool(self.bms_enable),
+            "bms_rate": float(self.bms_rate),
             "supply_temp": round(self.supply_reading(), 1),
             "return_temp": round(self.return_reading(), 1),
             "flue_temp": round(self.flue, 1),

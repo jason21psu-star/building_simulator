@@ -166,6 +166,37 @@ class VendorEquipment:
             v = min(float(info.maximum), v)
         setattr(self, name, v)
 
+    # ---------------------------------------------------------------- Modbus (PROTOCOL "modbus_tcp")
+    # A Modbus vendor lists holding / input registers in OBJECTS, numbered as its manual numbers
+    # them (4xxxx), with an optional 7th element: the scale (register = value x scale, default 1).
+    # Signed values are two's complement; a vendor with 32-bit values or other encodings
+    # overrides modbus_registers() / modbus_write() (the Cummins genset does).
+    UNLISTED_REGISTER = 0                        # what a read of an unlisted register in a block returns
+
+    @classmethod
+    def modbus_objects(cls) -> List[Tuple]:
+        return [o for o in cls.OBJECTS if o[0] in ("holding-register", "input-register")]
+
+    def modbus_registers(self, pf: float = 1.0) -> Dict[int, int]:
+        pts = self.points()
+        out: Dict[int, int] = {}
+        for o in self.modbus_objects():
+            scale = o[6] if len(o) > 6 else 1.0
+            v = pts.get(o[3], 0)
+            out[int(o[1])] = int(round(float(v) * scale)) & 0xFFFF
+        if out:
+            for reg in range(min(out), max(out) + 1):
+                out.setdefault(reg, self.UNLISTED_REGISTER)
+        return out
+
+    @classmethod
+    def modbus_command(cls, reg: int) -> Optional[Tuple[str, float]]:
+        """(key, scale) of the command object at a register, or None if it is not writable."""
+        for o in cls.modbus_objects():
+            if int(o[1]) == int(reg) and o[5] == "cmd":
+                return o[3], (o[6] if len(o) > 6 else 1.0)
+        return None
+
     def view_fields(self) -> List[Tuple[str, str]]:
         """Vendor columns for the plant page: (label, text)."""
         return []
@@ -224,7 +255,7 @@ def _msv_states(role: Tuple) -> List[str]:
 def signal_defs(cls: Type[VendorEquipment], pre: str, cfg: Dict[str, Any]) -> Tuple[List[SignalDef], List[SignalDef]]:
     """Model inputs (the BAS's command objects) and signals (everything it reads), named pre.key."""
     inputs, signals = [], []
-    for kind, _a, oname, key, units, role in cls.OBJECTS:
+    for kind, _a, oname, key, units, role in (o[:6] for o in cls.OBJECTS):
         name = f"{pre}.{key}"
         if role == "cmd":
             if kind.startswith("binary"):
@@ -244,7 +275,7 @@ def bacnet_device(cls: Type[VendorEquipment], row: Dict[str, Any], kind: str) ->
     """One BACnet device (plant_runner format) for a unit whose vendor speaks BACnet."""
     pre = row["pre"]
     cmds, mons = [], []
-    for okind, n, oname, key, units, role in cls.OBJECTS:
+    for okind, n, oname, key, units, role in (o[:6] for o in cls.OBJECTS):
         obj = f"{okind},{n}"
         if role == "cmd":
             d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
@@ -264,3 +295,55 @@ def bacnet_device(cls: Type[VendorEquipment], row: Dict[str, Any], kind: str) ->
             "model_name": cls.DEVICE_MODEL_NAME or f"{cls.DISPLAY} (simulated)",
             "description": row.get("description") or cls.DEFAULT_DESCRIPTION or cls.DISPLAY,
             "kind": kind, "vendor": cls.MODEL, "commands": cmds, "monitors": mons}
+
+
+class VendorModbusUnit:
+    """
+    Modbus TCP unit (gateway unit ID) for one plant row whose vendor speaks Modbus.
+    Reads come from the vendor's register image; writes to a command register set the
+    plant's input pre.key, which the plant hands to the vendor (bas_write) each step,
+    the same path a BACnet write takes.
+    """
+
+    def __init__(self, plant, row: Dict[str, Any]):
+        self.plant, self.row = plant, row
+        self._t = None
+        self._regs: Dict[int, int] = {}
+
+    @property
+    def unit(self) -> VendorEquipment:
+        return self.row["unit"]
+
+    def online(self) -> bool:
+        key = type(self.unit).fault_key("comm_loss")
+        return not self.plant.device_offline(self.row["pre"]) and not self.plant.fault(f"{self.row['pre']}_{key}")
+
+    def read(self, reg: int) -> Optional[int]:
+        if self._t != self.plant.sim_time:
+            self._regs, self._t = self.unit.modbus_registers(), self.plant.sim_time
+        return self._regs.get(reg)
+
+    def write(self, reg: int, value: int) -> bool:
+        cmd = type(self.unit).modbus_command(reg)
+        if cmd is None:
+            return False
+        key, scale = cmd
+        v = value - 65536 if value >= 32768 else value
+        self.plant.set_input(f"{self.row['pre']}.{key}", v / scale)
+        self._t = None
+        return True
+
+
+def modbus_units(plant, rows: List[Dict[str, Any]]) -> Dict[int, VendorModbusUnit]:
+    """Modbus units for the plant rows whose vendor speaks Modbus (CSV column unit_id)."""
+    out: Dict[int, VendorModbusUnit] = {}
+    for r in rows:
+        if r["unit"].PROTOCOL != "modbus_tcp":
+            continue
+        if r.get("unit_id") in (None, ""):
+            raise ValueError(f"{r['tag']}: a Modbus {r['unit'].FAMILY} needs a unit_id column")
+        uid = int(r["unit_id"])
+        if uid in out:
+            raise ValueError(f"{r['tag']}: Modbus unit ID {uid} is used twice")
+        out[uid] = VendorModbusUnit(plant, r)
+    return out

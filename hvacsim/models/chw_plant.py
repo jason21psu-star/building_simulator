@@ -38,7 +38,7 @@ from .components.hydronic import (
 from .components.tower import TowerCell
 from .components.drives import build_drive, drive_class, motor_for_hp
 from .components.chillers import chiller_class
-from .components.vendor import bacnet_device, signal_defs
+from .components.vendor import bacnet_device, modbus_units, signal_defs
 
 _A = "analog"
 _F = "degreesFahrenheit"
@@ -380,6 +380,10 @@ class ChwPlant(EquipmentModel):
     def bacnet_devices(self) -> List[Dict[str, Any]]:
         """The chillers' BACnet interfaces: one device each (used by plant_runner)."""
         return [bacnet_device(type(c["unit"]), c, "chiller") for c in self.chillers if c["unit"].PROTOCOL == "bacnet"]
+
+    def modbus_units(self) -> Dict[int, Any]:
+        """Units whose vendor speaks Modbus TCP: served by this plant's Modbus server (runner)."""
+        return modbus_units(self, self.chillers)
 
     def device_offline(self, pre: str) -> bool:
         c = self._chiller(pre)

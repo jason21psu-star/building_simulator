@@ -43,7 +43,7 @@ class PlantSim:
     def __init__(self, inst: Dict[str, Any], host):
         self.cfg = inst
         self.name = inst["name"]
-        self.modbus = None                 # generator plant: the host's Modbus TCP server
+        self.modbus = None                 # this plant's Modbus TCP server (generator plant, Modbus vendors)
         eq = inst["equipment"]
         self.model = MODELS[eq["type"]](eq.get("params") or {}, layout=inst.get("plant_layout") or {})
         plant_cfg = inst.get("plant") or {}

@@ -258,15 +258,24 @@ class Host:
             u.ats = a
         return gen
 
+    MODBUS_PORT = {"gen_plant": 502, "chw_plant": 5021, "hw_plant": 5022}
+
     def _make_modbus(self):
-        if self.gen is None:
-            return None
+        """One Modbus TCP server per plant with Modbus equipment (the generator plant, or any
+        plant with a Modbus vendor in its CSV); plant.modbus.port picks its port."""
         from .modbus_tcp import ModbusTcpServer
-        mb = (self.gen.cfg.get("plant") or {}).get("modbus") or {}
-        bind = "127.0.0.1" if self.demo else str(mb.get("bind") or str(self.cfg["host"]["address"]).split("/")[0])
-        server = ModbusTcpServer(self.gen.model.modbus_units(), bind, int(mb.get("port", 502)), name=self.gen.name)
-        self.gen.modbus = server
-        return server
+        self.modbus_servers = []
+        for u in self.units:
+            fn = getattr(u.model, "modbus_units", None)
+            units = fn() if fn else {}
+            if not units:
+                continue
+            mb = (u.cfg.get("plant") or {}).get("modbus") or {}
+            bind = "127.0.0.1" if self.demo else str(mb.get("bind") or str(self.cfg["host"]["address"]).split("/")[0])
+            port = int(mb.get("port", self.MODBUS_PORT.get(u.model.TYPE, 502)))
+            u.modbus = ModbusTcpServer(units, bind, port, name=u.name)
+            self.modbus_servers.append(u.modbus)
+        return self.gen.modbus if self.gen is not None else None
 
     def power(self, ok: bool, minutes: Optional[float] = None) -> None:
         """Utility power fail / restore for the whole host (optional automatic restore)."""
@@ -388,8 +397,8 @@ class Host:
     async def run(self) -> None:
         await asyncio.sleep(0.2)
         await self.announce()
-        if self.modbus is not None:
-            await self.modbus.start()
+        for server in self.modbus_servers:
+            await server.start()
         tasks = [asyncio.create_task(link.run()) for u in self.units for link in u.all_links()]
         tasks += [asyncio.create_task(m.run()) for m in self.mocks]
         last = time.monotonic()
@@ -412,8 +421,8 @@ class Host:
             u.step(dt)
 
     def close(self) -> None:
-        if getattr(self, "modbus", None) is not None:
-            self.modbus.close()
+        for server in getattr(self, "modbus_servers", []):
+            server.close()
         for u in self.units:
             u.close()
         for m in self.mocks:

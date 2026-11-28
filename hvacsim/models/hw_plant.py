@@ -24,7 +24,7 @@ from .base import EquipmentModel, FaultDef, ParamInfo, SignalDef
 from .chw_plant import DRIVE_FAULTS, ChwPlant, prefix
 from .components.airside import equal_percentage
 from .components.boilers import boiler_class
-from .components.vendor import bacnet_device, signal_defs
+from .components.vendor import bacnet_device, modbus_units, signal_defs
 from .components.hydronic import FT_PER_PSI, IsoValve, Pump, bisect, parallel_r, root, solve_pumps
 
 _A = "analog"
@@ -317,6 +317,10 @@ class HwPlant(EquipmentModel):
     def bacnet_devices(self) -> List[Dict[str, Any]]:
         """The boilers' BMS interfaces: one device each (used by plant_runner)."""
         return [bacnet_device(type(b["unit"]), b, "boiler") for b in self.boilers if b["unit"].PROTOCOL == "bacnet"]
+
+    def modbus_units(self) -> Dict[int, Any]:
+        """Units whose vendor speaks Modbus TCP: served by this plant's Modbus server (runner)."""
+        return modbus_units(self, self.boilers)
 
     def device_offline(self, pre: str) -> bool:
         b = self._boiler(pre)
