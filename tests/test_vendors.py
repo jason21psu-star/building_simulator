@@ -171,12 +171,16 @@ def run_b(u, seconds, gpm=400.0, ewt=140.0, h=1.0):
 
 
 def firing_cmd(u, rate=60.0, sp=170.0):
+    """What a BAS writes to fire a boiler in rate mode (or setpoint, if that's all it has)."""
     cls = type(u)
-    _write_role(u, "enable", True)
-    if "rate" in cls.BMS_MODES:
-        _write_role(u, "rate_cmd", rate)
+    mode = "rate" if "rate" in cls.BMS_MODES else "setpoint"
+    for key, val in cls.bas_setup_writes(mode).items():
+        u.bas_write(key, val)
+    _write_role(u, "enable", cls.encode_role("enable", True))
+    if mode == "rate":
+        _write_role(u, "rate_cmd", cls.encode_role("rate_cmd", rate))
     else:
-        _write_role(u, "sp_cmd", sp)
+        _write_role(u, "sp_cmd", cls.encode_role("sp_cmd", sp))
 
 
 @pytest.mark.parametrize("model", BOILERS)
@@ -260,11 +264,11 @@ def test_boiler_generic_faults(model):
     assert u.role("flow_switch") is True
     base = boiler(model)
     firing_cmd(base)
-    run_b(base, 300)
+    run_b(base, 300, ewt=110.0)
     f = {cls.fault_key("hx_scaled")}
     u = boiler(model, faults=f)
     firing_cmd(u)
-    run_b(u, 300)
+    run_b(u, 300, ewt=110.0)
     assert u.eff < base.eff - 0.02 and u.flue > base.flue + 20.0
 
 
@@ -448,7 +452,7 @@ def test_plant_vendor_settings_and_fault_aliases():
 def test_boiler_bms_mode_is_checked():
     from hvacsim.models.hw_plant import HwPlant
     with pytest.raises(ValueError, match="does not support BMS mode"):
-        HwPlant({"boiler_bms_mode": "setpoint"}, seed=1)
+        HwPlant({"boiler_bms_mode": "pressure"}, seed=1)
     m = HwPlant({"sensor_noise": 0.0}, seed=1)
     m.set_fault("b1_comm_loss", True)
     assert m.fault("b1_gateway_offline") and m.device_offline("b1")

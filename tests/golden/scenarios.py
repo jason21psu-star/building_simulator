@@ -185,7 +185,7 @@ def hw_plant() -> List[Dict[str, Any]]:
     I["louver"] = True
     for n in (1, 2):
         I[f"phwp{n}_ss"], I[f"phwp{n}_vfd_spd"] = True, 91.7
-        I[f"b{n}.bms_enable"], I[f"b{n}.bms_rate"] = True, 50.0
+        I[f"b{n}.config"], I[f"b{n}.coils"], I[f"b{n}.rate_cmd"] = 5.0, 1.0, 50.0
     I["shwp1_ss"], I["shwp1_vfd_spd"] = True, 80.0
     snaps: List[Dict[str, Any]] = []
     _run(m, 600, 5.0, 30, snaps, tag="start")
@@ -243,7 +243,8 @@ def chiller_vendor() -> List[Dict[str, Any]]:
 
 
 def boiler_vendor() -> List[Dict[str, Any]]:
-    """Lochinvar Crest: sequence, rate following, ignition failure lockout, reset, local, comm loss."""
+    """Lochinvar Crest (from its manuals): sequence, rate following, ignition lockout, reset, display power,
+    comm loss (BAS timer lapses), blocked vent lockout, louver, outage."""
     from hvacsim.models.hw_plant import HwPlant
     m = HwPlant({"clock_start": "2026-01-14 10:00", "oat": 20.0, "sensor_noise": 0.0}, seed=2)
     I = m.inputs
@@ -251,21 +252,21 @@ def boiler_vendor() -> List[Dict[str, Any]]:
     for n in (1, 2):
         I[f"phwp{n}_ss"], I[f"phwp{n}_vfd_spd"] = True, 91.7
     I["shwp1_ss"], I["shwp1_vfd_spd"] = True, 80.0
-    I["b1.bms_enable"], I["b1.bms_rate"] = True, 60.0
+    I["b1.config"], I["b1.coils"], I["b1.rate_cmd"] = 5.0, 1.0, 60.0
     snaps: List[Dict[str, Any]] = []
     _run(m, 30, 5.0, 5, snaps, tag="warm pumps")
-    I["b2.bms_enable"], I["b2.bms_rate"] = True, 60.0
+    I["b2.config"], I["b2.coils"], I["b2.rate_cmd"] = 5.0, 1.0, 60.0
     m.set_fault("b2_ignition_fail", True)
     _run(m, 180, 1.0, 5, snaps, tag="b2 ignition")
     m.set_fault("b2_ignition_fail", False)
     _run(m, 5, 1.0, 5, snaps, tag="b2 cleared")
     m.action("b2.reset")
     _run(m, 120, 1.0, 5, snaps, tag="b2 reset")
-    I["b1.bms_rate"] = 90.0
+    I["b1.rate_cmd"] = 90.0
     _run(m, 300, 5.0, 15, snaps, tag="rate 90")
-    m.action("b1.local")
-    _run(m, 120, 5.0, 15, snaps, tag="b1 local")
-    m.action("b1.bms")
+    m.action("b1.power")
+    _run(m, 120, 5.0, 15, snaps, tag="b1 display off")
+    m.action("b1.power")
     m.set_fault("b1_gateway_offline", True)
     _run(m, 120, 5.0, 15, snaps, tag="b1 comm")
     m.set_fault("b1_gateway_offline", False)

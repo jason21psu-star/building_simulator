@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("hvacsim")
 
 MAX_REGS = 40
+MAX_BITS = 2000
 ILLEGAL_FUNCTION, ILLEGAL_ADDRESS, ILLEGAL_VALUE, GATEWAY_NO_RESPONSE = 0x01, 0x02, 0x03, 0x0B
 
 
@@ -79,36 +80,81 @@ class ModbusTcpServer:
             self.clients -= 1
             writer.close()
 
-    def _note(self, peer, uid: int, fc: int, start: int, count: int, result: str) -> None:
+    def _note(self, peer, uid: int, fc: int, start: int, count: int, result: str, base: int = 40001) -> None:
         self.requests += 1
         if result != "ok":
             self.errors += 1
         who = peer[0] if isinstance(peer, tuple) else str(peer or "")
         self.log.appendleft({"t": time.strftime("%H:%M:%S"), "client": who, "unit": uid, "fc": fc,
-                             "start": 40001 + start if start >= 0 else None, "count": count, "result": result})
+                             "start": base + start if start >= 0 else None, "count": count, "result": result})
 
     def handle(self, uid: int, pdu: bytes, peer=None) -> bytes:
         """One request PDU -> response PDU (also used directly by tests)."""
         fc = pdu[0] if pdu else 0
-        exc = lambda code, start=-1, count=0, why="": (self._note(peer, uid, fc, start, count, why or f"exception {code:02X}")
-                                                     or bytes([fc | 0x80, code]))
+        exc = lambda code, start=-1, count=0, why="", base=40001: (
+            self._note(peer, uid, fc, start, count, why or f"exception {code:02X}", base) or bytes([fc | 0x80, code]))
         unit = self.units.get(uid)
         if unit is None or not unit.online():
             return exc(GATEWAY_NO_RESPONSE, why="no response (exception 0B)")
-        if fc in (3, 4):
+        if fc in (1, 2):                              # read coils (0xxxx) / discrete inputs (1xxxx)
             if len(pdu) < 5:
                 return exc(ILLEGAL_VALUE)
             start, count = struct.unpack(">HH", pdu[1:5])
+            base = 1 if fc == 1 else 10001
+            if not 1 <= count <= MAX_BITS:
+                return exc(ILLEGAL_VALUE, start, count, f"count {count} (1-{MAX_BITS}) - exception 03", base)
+            bits = []
+            for i in range(count):
+                v = unit.read(base + start + i)
+                if v is None:
+                    return exc(ILLEGAL_ADDRESS, start, count, f"{base + start + i:05d} not implemented - exception 02", base)
+                bits.append(1 if v else 0)
+            data = bytearray((count + 7) // 8)
+            for i, b_ in enumerate(bits):
+                if b_:
+                    data[i // 8] |= 1 << (i % 8)
+            self._note(peer, uid, fc, start, count, "ok", base)
+            return bytes([fc, len(data)]) + bytes(data)
+        if fc in (3, 4):                              # holding (4xxxx) / input (3xxxx) registers
+            if len(pdu) < 5:
+                return exc(ILLEGAL_VALUE)
+            start, count = struct.unpack(">HH", pdu[1:5])
+            base = 40001 if fc == 3 or getattr(unit, "INPUT_AS_HOLDING", False) else 30001
             if not 1 <= count <= MAX_REGS:
-                return exc(ILLEGAL_VALUE, start, count, f"count {count} (1-{MAX_REGS}) - exception 03")
+                return exc(ILLEGAL_VALUE, start, count, f"count {count} (1-{MAX_REGS}) - exception 03", base)
             vals = []
             for i in range(count):
-                v = unit.read(40001 + start + i)
+                v = unit.read(base + start + i)
                 if v is None:
-                    return exc(ILLEGAL_ADDRESS, start, count, f"{40001 + start + i} not implemented - exception 02")
+                    return exc(ILLEGAL_ADDRESS, start, count, f"{base + start + i} not implemented - exception 02", base)
                 vals.append(int(v) & 0xFFFF)
-            self._note(peer, uid, fc, start, count, "ok")
+            self._note(peer, uid, fc, start, count, "ok", base)
             return bytes([fc, 2 * count]) + struct.pack(f">{count}H", *vals)
+        if fc == 5:                                   # write single coil: FF00 = on, 0000 = off
+            if len(pdu) < 5:
+                return exc(ILLEGAL_VALUE)
+            addr, val = struct.unpack(">HH", pdu[1:5])
+            if val not in (0xFF00, 0x0000):
+                return exc(ILLEGAL_VALUE, addr, 1, "coil value not FF00 / 0000 - exception 03", 1)
+            if not unit.write(1 + addr, 1 if val else 0):
+                return exc(ILLEGAL_ADDRESS, addr, 1, f"{1 + addr:05d} not writable - exception 02", 1)
+            self._note(peer, uid, fc, addr, 1, "ok", 1)
+            return pdu[:5]
+        if fc == 15:                                  # write multiple coils
+            if len(pdu) < 6:
+                return exc(ILLEGAL_VALUE)
+            start, count, nbytes = struct.unpack(">HHB", pdu[1:6])
+            if not 1 <= count <= MAX_BITS or nbytes != (count + 7) // 8 or len(pdu) < 6 + nbytes:
+                return exc(ILLEGAL_VALUE, start, count, "", 1)
+            data = pdu[6:6 + nbytes]
+            for i in range(count):
+                if unit.read(1 + start + i) is None:
+                    return exc(ILLEGAL_ADDRESS, start, count, f"{1 + start + i:05d} not implemented - exception 02", 1)
+            for i in range(count):
+                if not unit.write(1 + start + i, (data[i // 8] >> (i % 8)) & 1):
+                    return exc(ILLEGAL_ADDRESS, start, count, f"{1 + start + i:05d} not writable - exception 02", 1)
+            self._note(peer, uid, fc, start, count, "ok", 1)
+            return pdu[:5]
         if fc == 6:
             if len(pdu) < 5:
                 return exc(ILLEGAL_VALUE)
@@ -165,11 +211,29 @@ class ModbusTcpClient:
             self.close()
             raise
 
+    BASE = {1: 1, 2: 10001, 3: 40001, 4: 30001}
+
     async def read(self, uid: int, register: int, count: int = 1, fc: int = 3) -> List[int]:
-        resp = await self.request(uid, struct.pack(">BHH", fc, register - 40001, count))
+        """Read registers (fc 3 / 4) or bits (fc 1 / 2), numbered as the manuals number them."""
+        resp = await self.request(uid, struct.pack(">BHH", fc, register - self.BASE[fc], count))
         if resp[0] & 0x80:
             raise ModbusError(resp[1])
+        if fc in (1, 2):
+            data = resp[2:2 + resp[1]]
+            return [(data[i // 8] >> (i % 8)) & 1 for i in range(count)]
         return list(struct.unpack(f">{count}H", resp[2:2 + 2 * count]))
+
+    async def write_coil(self, uid: int, coil: int, on: bool) -> None:
+        resp = await self.request(uid, struct.pack(">BHH", 5, coil - 1, 0xFF00 if on else 0))
+        if resp[0] & 0x80:
+            raise ModbusError(resp[1])
+
+    async def write_many(self, uid: int, register: int, values: List[int]) -> None:
+        n = len(values)
+        resp = await self.request(uid, struct.pack(f">BHHB{n}H", 16, register - 40001, n, 2 * n,
+                                                   *[int(v) & 0xFFFF for v in values]))
+        if resp[0] & 0x80:
+            raise ModbusError(resp[1])
 
     async def write(self, uid: int, register: int, value: int) -> None:
         resp = await self.request(uid, struct.pack(">BHH", 6, register - 40001, int(value) & 0xFFFF))

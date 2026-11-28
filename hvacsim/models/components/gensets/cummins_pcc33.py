@@ -443,7 +443,7 @@ class Genset(GeneratorSet):
             return True
         return False
 
-    def bas_write(self, key: str, value: Any) -> None:
+    def bas_write(self, key: str, value: Any, seen: bool = True) -> None:
         reg = next(o[1] for o in PCC_OBJECTS if o[3] == key and o[5] == "cmd")
         self.modbus_write(reg, int(value))
 

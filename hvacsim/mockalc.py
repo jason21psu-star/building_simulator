@@ -471,6 +471,7 @@ class HwPlantDemoLogic(PlantDemoLogic):
         self.bl = [b["pre"] for b in m.boilers]
         # the boilers' command objects by BAS role (each vendor names its own)
         self.bl_role = {b["pre"]: type(b["unit"]).ROLES for b in m.boilers}
+        self.bl_cls = {b["pre"]: type(b["unit"]) for b in m.boilers}
         self.pump_of = {b["pre"]: b["pumpx"]["pre"] for b in m.boilers}
         self.sp = [x["pre"] for x in m.pumps["secondary_pumps"]]
         self.br = [(b["pre"], int(b["controller_device"])) for b in m.branches]
@@ -541,11 +542,14 @@ class HwPlantDemoLogic(PlantDemoLogic):
             outs[f"{pump}_ss"] = want or self.pump_post[b] > 0
             outs[f"{pump}_vfd_spd"] = 91.7
             enable = want and self.pump_run[b] >= 30.0
-            outs[f"{b}.{self.bl_role[b]['enable']}"] = enable
-            if m.p.get("boiler_bms_mode", "rate") == "setpoint":      # the boiler modulates to the reset setpoint
-                outs[f"{b}.{self.bl_role[b]['sp_cmd']}"] = round(sp, 1)
+            cls, mode = self.bl_cls[b], m.p.get("boiler_bms_mode", "rate")
+            for key, val in cls.bas_setup_writes(mode).items():               # e.g. the Crest's configuration bits
+                outs[f"{b}.{key}"] = val
+            outs[f"{b}.{self.bl_role[b]['enable']}"] = cls.encode_role("enable", enable)
+            if mode == "setpoint":                                            # the boiler modulates to the reset setpoint
+                outs[f"{b}.{self.bl_role[b]['sp_cmd']}"] = cls.encode_role("sp_cmd", round(sp, 1))
             else:
-                outs[f"{b}.{self.bl_role[b]['rate_cmd']}"] = round(self.rate, 1) if enable else 0.0
+                outs[f"{b}.{self.bl_role[b]['rate_cmd']}"] = cls.encode_role("rate_cmd", round(self.rate, 1) if enable else 0.0)
         outs["louver"] = bool(on_set)
         # secondary pumps: plant DP, setpoint trimmed by the remote DPs
         rdp = [self.value("hw_remote_dp", ctl) for _p, ctl in self.br]

@@ -1,6 +1,12 @@
 # Lochinvar Crest from the manuals: design (for review)
 
-Status: **for review, nothing built.** The Crest boiler was built without its
+Status: **built** (user doc: [BOILER_CREST.md](BOILER_CREST.md)). All ten
+questions in section 11 were built with their proposed defaults, with one
+change: a louver that never proves only blocks the start (the I&O sequence
+says "a block that will clear when the louver proving switch closes");
+lockout 134 applies when proof is lost while firing.
+
+The Crest boiler was built without its
 manuals, and everything Crest-specific was marked *(A)*: sequence timings,
 limits, codes and the BACnet object list. This note replaces those
 assumptions with the manuals.

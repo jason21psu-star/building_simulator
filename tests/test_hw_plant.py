@@ -1,4 +1,5 @@
-"""Hot water plant (hw_plant): Crest boilers, dedicated primary pumps, decoupler, branches, power, BACnet."""
+"""Hot water plant (hw_plant): Crest FCB boilers (from the manuals), dedicated primary pumps, decoupler, branches,
+power, BACnet / Modbus."""
 
 import asyncio
 import random
@@ -25,7 +26,7 @@ def start(m, boilers=(1,), rate=60.0, sec_pumps=1, sec_speed=80.0, prim_speed=91
     I["louver"] = True
     for n in boilers:
         I[f"phwp{n}_ss"], I[f"phwp{n}_vfd_spd"] = True, prim_speed
-        I[f"b{n}.bms_enable"], I[f"b{n}.bms_rate"] = True, rate
+        I[f"b{n}.config"], I[f"b{n}.coils"], I[f"b{n}.rate_cmd"] = 5.0, 1.0, rate
     for i in range(1, sec_pumps + 1):
         I[f"shwp{i}_ss"], I[f"shwp{i}_vfd_spd"] = True, sec_speed
 
@@ -47,8 +48,12 @@ def test_points_and_controllers():
     assert m.io_names["west_hw_eob_vlv"] == "hw_eob_vlv"
     names = [d["tag"] for d in m.bacnet_devices()]
     assert names == ["B-1", "B-2", "B-3"]
-    objs = {o["name"] for o in m.bacnet_devices()[0]["commands"]}
-    assert objs == {"BMS ENABLE", "BMS FIRING RATE"}
+    dev = m.bacnet_devices()[0]
+    objs = {o["name"]: o["object"] for o in dev["commands"] + dev["monitors"]}
+    assert objs["Configuration"] == "analog-value,0" and objs["Coils"] == "analog-value,1"
+    assert objs["0-10 Volt Input / Rate Command / Setpoint Command"] == "analog-value,2"
+    assert objs["Outlet Temperature"] == "analog-input,8" and objs["Boiler Status Code"] == "analog-input,13"
+    assert objs["Flame 1"] == "binary-input,7" and objs["Boiler Pump"] == "binary-input,34"
 
 
 def test_each_boiler_needs_one_dedicated_pump():
@@ -68,11 +73,21 @@ def test_csv_schedules_load():
     assert [d["device_instance"] for d in hwp["devices"]] == [4010051, 4010052, 4010053, 4010061, 4010062, 4010063, 4010064]
 
 
-# ----- boiler (component) ----------------------------------------------------------
+# ----- boiler (component): Lochinvar Crest FCB, from its manuals (docs/CREST_DESIGN.md) -------
 
 
-def crest(**faults):
-    return CrestBoiler("B-1", {}, set(faults), random.Random(1), t_init=120.0)
+def crest(cfg=None, **faults):
+    return CrestBoiler("B-1", cfg or {}, set(faults), random.Random(1), t_init=120.0)
+
+
+def bas(b, rate=None, enable=True, config=5, setpoint_pct=None):
+    """What the BAS writes (communication manual section 10): AV0 config bits, AV1 coils, AV2 command."""
+    b.bas_write("config", config)
+    b.bas_write("coils", 1 if enable else 0)
+    if rate is not None:
+        b.bas_write("rate_cmd", rate)
+    if setpoint_pct is not None:
+        b.bas_write("rate_cmd", setpoint_pct)
 
 
 def go(b, seconds, gpm=400.0, ewt=120.0, h=0.5):
@@ -80,104 +95,184 @@ def go(b, seconds, gpm=400.0, ewt=120.0, h=0.5):
         b.step(h, gpm, ewt)
 
 
-def test_boiler_sequence_and_post_purge():
+def test_boiler_sequence_status_and_pump_delay():
     b = crest()
-    b.bms_enable, b.bms_rate = True, 70.0
+    bas(b, rate=70.0)
     go(b, 5)
-    assert b.state == 1                                     # pre-purge
+    assert b.seq == 1 and b.status_code == 22                 # pre-purge; SH demand from BMS
     go(b, 10)
-    assert b.flame and b.state == 3 and b.rate == pytest.approx(0.40)   # low fire hold
+    assert b.flame and b.seq == 3 and b.rate == pytest.approx(0.40)   # flame stabilization
     go(b, 60)
-    assert b.state == 4 and b.rate == pytest.approx(0.70, abs=0.01)
-    assert b.points()["pump_request"]
-    b.bms_rate = 0.0
+    assert b.seq == 4 and b.rate == pytest.approx(0.70, abs=0.01)
+    p = b.points()
+    assert p["boiler_pump"] and p["runtime"] and p["flame1"] and p["firing_rate"] == 70
+    assert p["outlet_c"] == pytest.approx((b.t_hx - 32) * 5 / 9, abs=0.06)      # BAS temperatures in °C
+    assert int(p["bi_32_47"]) & (1 << (34 - 32))                                   # packed binary inputs
+    bas(b, rate=0.0)
     go(b, 5)
-    assert b.state == 5 and not b.flame                      # post-purge
+    assert b.seq == 5 and not b.flame and b.status_code == 33  # post-purge, SH pump delay (30 s)
     go(b, 30)
-    assert b.state == 6                                      # anti-cycle
-    b.bms_rate = 70.0
-    go(b, 20)
-    assert b.state in (6, 1)
-    go(b, 60)
+    assert b.status_code == 11 and not b.points()["boiler_pump"]
+    bas(b, rate=70.0)
+    go(b, 5)
+    assert b.blocking == 12                                    # anti-cycling
+    go(b, 90)
     assert b.flame and b.cycles == 2
 
 
-def test_boiler_blocks_without_flow_louver_or_gas():
+def test_configuration_bits_are_required():
     b = crest()
-    b.bms_enable, b.bms_rate = True, 50.0
-    go(b, 10, gpm=50.0)
-    assert b.state == 7 and b.blocking == 1 and not b.flame
-    b.louver_ok = False
-    go(b, 2, gpm=50.0)
-    assert b.blocking == 1
-    go(b, 2, gpm=400.0)
-    assert b.blocking == 2
-    b.louver_ok, b.gas_ok = True, False
-    go(b, 2)
-    assert b.blocking == 3
-    b.gas_ok = True
+    bas(b, rate=70.0, config=0)                                # coils and rate written, but no bits
     go(b, 60)
-    assert b.flame and b.blocking == 0 and b.lockout == 0   # blocking conditions clear by themselves
+    assert not b.flame and b.status_code == 11
+    bas(b, rate=70.0, config=1)                                # enable bit only: the rate is ignored
+    go(b, 60)
+    assert not b.flame
+    bas(b, rate=70.0, config=5)
+    go(b, 60)
+    assert b.flame
 
 
-def test_ignition_failure_locks_out_after_three_tries_and_reset():
+def test_setpoint_mode_scaling():
+    from hvacsim.models.components.boilers.lochinvar_crest import CrestBoiler as C
+    assert C.encode_role("sp_cmd", 110.0) == 49                # the manual's example: 110 °F -> 4.92 V -> 49
+    b = crest({"bms_type": "setpoint"})
+    bas(b, setpoint_pct=C.encode_role("sp_cmd", 150.0))
+    go(b, 900, gpm=200.0, ewt=120.0)                            # 30 °F rise is within its 3999 MBH at 200 gpm
+    assert b.flame and b.target_f == pytest.approx(150.0, abs=0.6)
+    assert 145.0 < b.t_hx < 155.0
+
+
+def test_bas_timer_reverts_to_own_controls():
+    b = crest()
+    bas(b, rate=60.0)
+    go(b, 60)
+    assert b.flame and b.bas_active
+    b.bas_idle_s = 121.0                                       # the BAS stopped writing (runner sets this)
+    go(b, 40)
+    assert not b.bas_active and not b.flame and b.status_code in (33, 11)   # hardwired Enable open
+    b2 = crest({"hw_enable": True})
+    bas(b2, rate=60.0)
+    go(b2, 60)
+    b2.bas_idle_s = 121.0
+    go(b2, 300)
+    assert b2.flame and b2.status_code == 21 and b2.target_f == 180.0       # local setpoint
+    b2.bas_write("rate_cmd", 60.0)                             # a BAS write restarts the timer
+    assert b2.bas_active
+
+
+def test_limits_from_the_manual():
+    b = crest()
+    bas(b, rate=100.0)
+    go(b, 60)
+    b.t_hx = 190.0
+    assert b._rate_limit() < 0.6                               # outlet > 185 °F: reduce
+    go(b, 1, ewt=185.0)
+    b.t_hx = 196.0
+    go(b, 1, ewt=185.0)
+    assert b.blocking == 11 and not b.flame and b.status_code == 2   # 195 °F auto-reset high limit
+    b.flue = 230.0
+    assert b._limits() in (11, 15)
+
+
+def test_lockouts_codes_and_reset():
     b = crest(ignition_fail=True)
-    b.bms_enable, b.bms_rate = True, 50.0
+    bas(b, rate=50.0)
     go(b, 60)
-    assert b.lockout == 1 and b.state == 8 and b.points()["alarm"]
+    assert b.lockout == 233 and b.status_code == 40 and b.points()["alarm_contacts"]
     b.faults.clear()
     go(b, 30)
-    assert b.lockout == 1                                    # latched
+    assert b.lockout == 233                                    # latched
     b.display("reset")
     go(b, 60)
     assert b.flame and b.lockout == 0
+    assert b.points()["lockout_code"] == 233                   # AI15 keeps the last code; status says 22, not 40
+    assert b.points()["status_code"] == 22
+    for fault, code in (("high_limit_trip", 240), ("lwco_trip", 170), ("supply_sensor_open", 193),
+                        ("return_sensor_short", 179), ("gas_valve", 244), ("gas_pressure", 169)):
+        b = crest(**{fault: True})
+        bas(b, rate=50.0)
+        go(b, 30)
+        assert b.lockout == code, fault
 
 
 def test_no_flow_with_stuck_flow_switch_trips_high_limit():
     b = crest(flow_sw_stuck=True)
-    b.bms_enable, b.bms_rate = True, 100.0
+    bas(b, rate=100.0)
     go(b, 1800, gpm=0.0)
-    assert b.lockout == 2                                    # manual reset high limit
-    b.display("reset")                                       # cause gone (cooled?) - still too hot is fine
-    assert b.lockout in (0, 2)
+    assert b.lockout in (240, 246)                             # manual reset high limit
 
 
-def test_power_loss_does_not_latch_and_comm_loss_holds_then_blocks():
+def test_power_loss_and_display_power_key():
     b = crest()
-    b.bms_enable, b.bms_rate = True, 50.0
+    bas(b, rate=50.0)
     go(b, 60)
     assert b.flame
     b.powered = False
     go(b, 5)
-    assert not b.flame and b.blocking == 4 and b.lockout == 0
+    assert not b.flame and b.lockout == 0 and b.status_text() == "NO POWER"
     b.powered = True
     go(b, 120)
     assert b.flame
-    b.comm_ok = False
-    go(b, 50)
-    assert b.flame                                           # holds the last rate for 60 s
-    go(b, 15)
-    assert not b.flame and b.blocking == 6
-    b.comm_ok = True
+    b.display("power")
+    go(b, 5)
+    assert not b.flame and b.status_code == 10 and b.blocking == 8
+    b.display("power")
     go(b, 120)
     assert b.flame
+
+
+def test_louver_blocks_start_and_lockout_if_lost_while_firing():
+    b = crest()
+    b.louver_ok = False
+    bas(b, rate=50.0)
+    go(b, 300)
+    assert not b.flame and b.lockout == 0 and "louver" in b.status_text()
+    b.louver_ok = True
+    go(b, 60)
+    assert b.flame
+    b.louver_ok = False
+    go(b, 2)
+    assert b.lockout == 134
 
 
 def test_efficiency_falls_with_return_temperature():
     lo, hi = crest(), crest()
     for b, ewt in ((lo, 90.0), (hi, 150.0)):
-        b.bms_enable, b.bms_rate = True, 50.0
+        bas(b, rate=50.0)
         go(b, 120, ewt=ewt)
     assert lo.eff > 0.94 and hi.eff < 0.89
     assert lo.condensate > 0 and hi.condensate == 0
-    assert lo.points()["flue_temp"] < hi.points()["flue_temp"]
+    assert lo.points()["flue_c"] < hi.points()["flue_c"]
 
 
-def test_local_mode_ignores_bms():
-    b = crest()
-    b.display("local")
-    go(b, 300)
-    assert b.flame and not b.points()["bms_mode"]           # runs on its own 180 °F setpoint
+def test_modbus_crest_map():
+    import struct as st
+    from hvacsim.modbus_tcp import ModbusTcpServer
+    lay = {"boilers": [{"tag": "B-1", "controller_device": 242001, "model": "lochinvar_crest_modbus", "unit_id": 1}],
+           "primary_pumps": [{"tag": "PHWP-1", "boiler": "B-1", "controller_device": 242001}]}
+    m = HwPlant({"sensor_noise": 0.0}, layout=lay, seed=1)
+    assert m.bacnet_devices() == []
+    srv = ModbusTcpServer(m.modbus_units())
+
+    def ok(resp):
+        assert not resp[0] & 0x80, resp
+        return resp
+    ok(srv.handle(1, st.pack(">BHH", 6, 0, 5)))                # 40001 configuration = 5
+    ok(srv.handle(1, st.pack(">BHH", 6, 1, 1)))                # 40002 coils = 1
+    ok(srv.handle(1, st.pack(">BHH", 6, 2, 60)))               # 40003 rate 60 %
+    ok(srv.handle(1, st.pack(">BHH", 5, 0, 0xFF00)))           # coil 00001 Boiler Enable
+    m.inputs["louver"] = True
+    m.inputs["phwp1_ss"], m.inputs["phwp1_vfd_spd"] = True, 91.7
+    m.inputs["shwp1_ss"], m.inputs["shwp1_vfd_spd"] = True, 80.0
+    run(m, 300)
+    assert m.signals["b1.flame1"]
+    r = ok(srv.handle(1, st.pack(">BHH", 4, 8, 8)))            # 30009-30016 outlet .. lockout (function 4)
+    regs = st.unpack(">8H", r[2:])
+    assert regs[0] == round(m.boilers[0]["unit"].points()["outlet_c"] * 10)      # x10 °C
+    assert regs[5] == 22                                                          # 30014 status
+    r = ok(srv.handle(1, st.pack(">BHH", 2, 7, 1)))            # 10008 Flame 1 (function 2)
+    assert r[2] & 1
 
 
 # ----- plant ------------------------------------------------------------------------
@@ -188,9 +283,9 @@ def test_one_boiler_heats_the_loop():
     start(m)
     run(m, 1200)
     s = m.signals
-    assert s["b1.status"].startswith("Running")
+    assert s["b1.status"].startswith("Running") and s["b1.status_code"] == 22
     assert s["phwp1.flow"] == pytest.approx(400, abs=15)     # balancer speed gives boiler design flow
-    assert not s["b2.flow_switch"]
+    assert not s["b2.flow_switch"] and s["b2.status_code"] == 11
     assert s["shws_actual"] > s["shwr_actual"] + 3
     assert s["plant_mbh"] > 1500 and 85 < s["plant_eff"] < 97
     assert s["louver_open"] and s["b1_alarm"] is False
@@ -223,10 +318,10 @@ def test_primary_pump_turndown_opens_the_flow_switch():
     m = plant()
     start(m)
     run(m, 300)
-    assert m.signals["b1.flame"]
+    assert m.signals["b1.flame1"]
     m.inputs["phwp1_vfd_spd"] = 0.0                        # drive minimum 15 Hz: below the boiler's 120 gpm
     run(m, 120)
-    assert m.signals["b1.blocking_code"] == 1 and not m.signals["b1.flame"]
+    assert not m.signals["b1.flame1"] and "Flow switch open" in m.signals["b1.status"]
 
 
 def test_louver_interlock_and_estop():
@@ -234,20 +329,20 @@ def test_louver_interlock_and_estop():
     start(m)
     m.inputs["louver"] = False
     run(m, 120)
-    assert m.signals["b1.blocking_code"] == 2 and not m.signals["louver_open"]
+    assert not m.signals["b1.flame1"] and "louver" in m.signals["b1.status"] and not m.signals["louver_open"]
     m.inputs["louver"] = True
     run(m, 180)
-    assert m.signals["b1.flame"]
+    assert m.signals["b1.flame1"]
     m.action("estop")
     run(m, 10)
-    assert not m.signals["b1.flame"] and not m.signals["boiler_estop"] and m.signals["b1.blocking_code"] == 4
+    assert not m.signals["b1.flame1"] and not m.signals["boiler_estop"] and m.signals["b1.status"] == "NO POWER"
     assert m.signals["phwp1.flow"] > 300                       # E-stop removes boiler power only
     m.action("estop_reset")
     run(m, 180)
-    assert m.signals["b1.flame"]
+    assert m.signals["b1.flame1"]
     m.set_fault("louver_stuck_closed", True)
     run(m, 60)
-    assert m.signals["b1.blocking_code"] == 2
+    assert m.signals["b1.lockout_code"] == 134 and m.signals["b1.status_code"] == 40   # proof lost while firing
 
 
 def test_utility_outage_and_restart():
@@ -257,11 +352,11 @@ def test_utility_outage_and_restart():
     m.set_utility(False)
     run(m, 30)
     s = m.signals
-    assert not s["b1.flame"] and s["b1.lockout_code"] == 0 and m.device_offline("b1")
+    assert not s["b1.flame1"] and s["b1.lockout_code"] == 0 and m.device_offline("b1")
     assert s["secondary_flow"] < 50 and not s["utility_power"]
     m.set_utility(True)
     run(m, 240)
-    assert m.signals["b1.flame"]                               # drives level-start, boiler re-runs its sequence
+    assert m.signals["b1.flame1"]                               # drives level-start, boiler re-runs its sequence
 
 
 def test_end_of_branch_valve_keeps_pipe_hot():
@@ -306,7 +401,7 @@ def test_pump_faults():
     m.set_fault("phwp1_seized", True)
     run(m, 120)
     assert "FAULT" in m.signals["phwp1.status"] and not m.signals["phwp1_vfd_flt"]
-    assert not m.signals["b1.flame"]
+    assert not m.signals["b1.flame1"]
 
 
 def test_sensor_faults():
@@ -321,7 +416,7 @@ def test_sensor_faults():
     s = m.signals
     assert s["hw_dcplr_flow"] == 0.0 and s["shws_temp"] == -40.0
     assert s["hw_dp"] == pytest.approx(s["plant_dp"] * 0.5, abs=0.3)
-    assert s["b1.supply_temp"] == -40.0 and s["b1.blocking_code"] == 8
+    assert s["b1.outlet_c"] == -40.0 and s["b1.lockout_code"] == 193
 
 
 # ----- host coupling -----------------------------------------------------------------
@@ -368,9 +463,9 @@ async def _demo():
     assert len(pu.facets) == 7
     b1 = pu.facets[0]
     names = {str(o.objectName): o for o in b1.app.objectIdentifier.values()}
-    assert {"BMS ENABLE", "BMS FIRING RATE", "STATUS", "LOCKOUT CODE"} <= set(names)
-    st = names["STATUS"]
-    assert st.stateText[0] == "Standby" and len(st.stateText) == 10
+    assert {"Configuration", "Coils", "Boiler Status Code", "Boiler Lockout Code", "Outlet Temperature"} <= set(names)
+    st = names["Boiler Status Code"]
+    assert str(names["Outlet Temperature"].units) == "degrees-celsius"
     task = asyncio.create_task(host.run())
     try:
         loop = asyncio.get_running_loop()
@@ -378,19 +473,19 @@ async def _demo():
         while loop.time() < end:
             await asyncio.sleep(0.5)
             ok = all(p.ok for l in pu.links.values() for p in l.points)
-            if ok and pu.model.signals["b1.flame"]:
+            if ok and pu.model.signals["b1.flame1"]:
                 break
         bad = [(c, p.object_name, p.last_error) for c, l in pu.links.items() for p in l.points if not p.ok]
         assert not bad, bad[:5]
         s = pu.model.signals
-        assert s["b1.flame"], s["b1.status"]                       # demo logic fired B-1 over BACnet
-        assert int(st.presentValue) == s["b1.status_code"] + 1
+        assert s["b1.flame1"], s["b1.status"]                       # demo logic fired B-1 over BACnet
+        assert float(st.presentValue) == s["b1.status_code"] == 22
         mocks = {m.device_instance: m for m in host.mocks}
         assert {242001, 242002, 242011, 242012} <= set(mocks)
         assert mocks[242011].value("hw_remote_dp") == pytest.approx(s["east_hw_remote_dp"], abs=0.5)
         host.power(False, minutes=1)
         await asyncio.sleep(1.0)
-        assert b1.app.offline and not s["b1.flame"]
+        assert b1.app.offline and not s["b1.flame1"]
     finally:
         task.cancel()
         host.close()

@@ -320,14 +320,22 @@ simulator refuses to start and names the missing row otherwise.
 | 242002 | 4010062 | secondary pumps, `phws_temp`, `phwr_temp`, `shws_temp`, `shwr_temp`, `shw_flow`, `hw_dcplr_flow` (+ = supply → return), `hw_dp`, `hw_loop_press` |
 | 242011 / 242012 | 4010063 / 4010064 | East / West branch: `hw_remote_dp`, `hw_eob_temp`, `hw_eob_vlv` (3-way valve) |
 
-**Boilers (Mode B).** Each boiler is its own device (`B-1` 4010051 …).
-The ALC writes `BMS ENABLE` (BV1) and `BMS FIRING RATE` (AV1, %). The boiler
-runs its own pre-purge, ignition, low-fire hold, modulation and post-purge,
-and reports `STATUS`, `LOCKOUT CODE` and `BLOCKING CODE` as multi-state
-values (BACnet value = code + 1). **The object names and codes are
-assumptions** until the Crest BMS points list is available (see the design
-doc, section 13). The web page has the boiler display buttons: BMS / Local
-and Reset for lockouts.
+**Boilers (Mode B).** Each boiler is its own device (`B-1` 4010051 …): a
+Lochinvar Crest FCB4000N with the object list from its ModBus and BACnet
+Communication Instructions ([docs/BOILER_CREST.md](docs/BOILER_CREST.md)).
+- **What the ALC writes:**
+  - `Configuration` (AV0) = 5;
+  - `Coils` (AV1) bit 0 = enable;
+  - `0-10 Volt Input / Rate Command / Setpoint Command` (AV2, %).
+
+  It must keep writing inside the boiler's 120 s BAS timer, or the boiler
+  falls back to its own controls.
+- **What it reports:** temperatures in °C, and `Boiler Status Code` (22 =
+  heating on BMS demand, 40 = lockout), `Boiler Blocking Code` and
+  `Boiler Lockout Code`, all as the manual numbers them.
+- **Display buttons** (web page): Power and Reset.
+- **Modbus:** a boiler row with `model: lochinvar_crest_modbus` and a
+  `unit_id` is on Modbus TCP instead (port 5022).
 
 **Power and emergency stop.** A utility outage drops the boilers, all pumps
 and the louver; nothing latches. The boiler room E-stop on the plant page

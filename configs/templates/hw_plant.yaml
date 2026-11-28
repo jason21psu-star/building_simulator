@@ -8,8 +8,12 @@
 #  exactly one dedicated primary pump (primary_pumps.csv "boiler" column).
 #
 #  BACnet devices the plant presents on the virtual network:
-#    one per boiler (sim_device / mac columns): Lochinvar Crest BMS objects
-#      (ASSUMED names - see the design doc, open item 1)
+#    one per boiler (sim_device / mac columns): Lochinvar Crest FCB BACnet
+#      objects, as in the ModBus and BACnet Communication Instructions
+#      (docs/BOILER_CREST.md).  The BAS writes AV0 Configuration = 5, AV1
+#      Coils = 1 and AV2 Rate Command, and must keep writing inside the
+#      boiler's BAS timer (120 s).  A boiler row with model
+#      lochinvar_crest_modbus and a unit_id is served on Modbus TCP instead.
 #    one I/O device per ALC controller (plant.io_devices): the BO/AO objects
 #      the controller's network outputs write ("the field wiring")
 #  Sensor values are written into the controllers' out-of-service inputs by
@@ -35,6 +39,9 @@ equipment:
     occ_days: mon-fri
     occ_start: 6.0
     occ_end: 18.0
+    boiler_bms_mode: rate          # rate (AV2 = firing rate %) or setpoint (AV2 = % of the 0-10 V span)
+    boiler_hw_enable: false        # hardwired Enable made: boilers keep heating on their own after a BAS loss
+    boiler: {}                     # Crest display settings, e.g. {bas_timer_s: 60, anti_cycle_s: 120}
 
 plant:
   # which ALC controller gets each plant sensor (defaults shown)

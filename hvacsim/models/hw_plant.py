@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import EquipmentModel, FaultDef, ParamInfo, SignalDef
 from .chw_plant import DRIVE_FAULTS, ChwPlant, prefix
@@ -33,7 +33,7 @@ _GPM = "usGallonsPerMinute"
 _PSI = "poundsForcePerSquareInch"
 
 EQUIPMENT_DEFAULTS = {
-    "boilers": {"input_mbh": 4000.0, "design_gpm": 400.0, "min_flow_gpm": 120.0, "turndown": 25.0, "hx_dp_ft": 15.0,
+    "boilers": {"input_mbh": 3999.0, "design_gpm": 400.0, "min_flow_gpm": 120.0, "turndown": 20.0, "hx_dp_ft": 15.0,
                 "model": "lochinvar_crest"},
     "primary_pumps": {"design_gpm": 400.0, "design_head_ft": 40.0, "motor_hp": 7.5, "ct_range_amps": 20.0, "boiler": "",
                       "drive_model": "ach580"},
@@ -119,6 +119,7 @@ class HwPlant(EquipmentModel):
         "phwp_drive": {}, "shwp_drive": {},
         "boiler": {},                    # vendor settings, flat or per model ({"lochinvar_crest": {...}})
         "boiler_bms_mode": "rate",       # rate (enable + firing rate) or setpoint (enable + supply setpoint)
+        "boiler_hw_enable": False,       # boilers' hardwired Enable input made (they run on their own after a BAS loss)
     }
     WEATHER_PARAMS = {"oat": "oa_temp_actual", "oa_w": "oa_w_actual"}
     CONDITIONS = ["oat", "load_scale"]
@@ -318,6 +319,10 @@ class HwPlant(EquipmentModel):
         """The boilers' BMS interfaces: one device each (used by plant_runner)."""
         return [bacnet_device(type(b["unit"]), b, "boiler") for b in self.boilers if b["unit"].PROTOCOL == "bacnet"]
 
+    def vendor_units(self) -> List[Tuple[str, Any]]:
+        """(prefix, vendor unit) for every vendor-integrated unit (the runner feeds their BAS timers)."""
+        return [(r["pre"], r["unit"]) for r in getattr(self, "boilers", [])]
+
     def modbus_units(self) -> Dict[int, Any]:
         """Units whose vendor speaks Modbus TCP: served by this plant's Modbus server (runner)."""
         return modbus_units(self, self.boilers)
@@ -458,7 +463,9 @@ class HwPlant(EquipmentModel):
         """The row's boiler, with its vendor settings (row columns, then the plant's boiler: {...})."""
         cls = boiler_class(b["model"])
         cls.check_mode(self.p["boiler_bms_mode"])
-        return cls(b["tag"], {**b, **cls.settings_for(b, self.p["boiler"])}, faults, self.rng, t_init=t_init)
+        cfg = {**b, **{k: v for k, v in (("bms_type", self.p["boiler_bms_mode"]),
+                                          ("hw_enable", self.p["boiler_hw_enable"])) if k in cls.SETTINGS}}
+        return cls(b["tag"], {**cfg, **cls.settings_for(cfg, self.p["boiler"])}, faults, self.rng, t_init=t_init)
 
     def _boiler(self, pre: str) -> Optional[Dict[str, Any]]:
         return next((b for b in getattr(self, "boilers", []) if b["pre"] == pre), None)
@@ -658,7 +665,7 @@ class HwPlant(EquipmentModel):
             c.louver_ok, c.gas_ok = louver_ok, gas_ok
             c.comm_ok = not self.device_offline(pre)
             for key in c.cmd_keys():
-                c.bas_write(key, self.inputs[f"{pre}.{key}"])
+                c.bas_write(key, self.inputs[f"{pre}.{key}"], seen=False)
             t_out = c.step(h, b["q"], self.t_pr if b["q"] > 1.0 else c.t_hx, self.room)
             if b["q"] > 1.0:
                 num += b["q"] * t_out

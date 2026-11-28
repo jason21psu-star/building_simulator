@@ -43,6 +43,7 @@ class PlantSim:
     def __init__(self, inst: Dict[str, Any], host):
         self.cfg = inst
         self.name = inst["name"]
+        self._t_start = time.monotonic()
         self.modbus = None                 # this plant's Modbus TCP server (generator plant, Modbus vendors)
         eq = inst["equipment"]
         self.model = MODELS[eq["type"]](eq.get("params") or {}, layout=inst.get("plant_layout") or {})
@@ -139,10 +140,16 @@ class PlantSim:
         if self.weather is not None:
             for param, signal in self.weather_params.items():
                 m.p[param] = self.weather.model.signals[signal]
+        now = time.monotonic()
         for f in self.facets:
             if f.pre is not None:
                 f.app.offline = m.device_offline(f.pre)
             bacnet_io.read_commands(m, f.commands)
+        # BAS timers (e.g. the Crest's): real seconds since the BAS last wrote each vendor device
+        for pre, unit in getattr(m, "vendor_units", lambda: [])():
+            stamps = [getattr(cp.obj, "_last_write", 0.0) for f in self.facets if f.pre == pre for cp in f.commands]
+            last = max(stamps + [getattr(unit, "bas_last_write", 0.0), self._t_start])
+            unit.bas_idle_s = max(0.0, now - last)
         if dt > 0:
             m.step(dt)
         for f in self.facets:

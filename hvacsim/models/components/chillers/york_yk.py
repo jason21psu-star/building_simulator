@@ -196,7 +196,7 @@ class YorkYK(Chiller):
             return False
         return float(cfg.get("chws_design_temp", 44.0)) if key == "rem_sp" else 100.0
 
-    def bas_write(self, key: str, value: Any) -> None:
+    def bas_write(self, key: str, value: Any, seen: bool = True) -> None:
         if key == "rem_run":
             self.rem_run = bool(value)
         elif key in ("rem_sp", "rem_cur_limit"):

@@ -381,6 +381,10 @@ class ChwPlant(EquipmentModel):
         """The chillers' BACnet interfaces: one device each (used by plant_runner)."""
         return [bacnet_device(type(c["unit"]), c, "chiller") for c in self.chillers if c["unit"].PROTOCOL == "bacnet"]
 
+    def vendor_units(self) -> List[Tuple[str, Any]]:
+        """(prefix, vendor unit) for every vendor-integrated unit (the runner feeds their BAS timers)."""
+        return [(r["pre"], r["unit"]) for r in getattr(self, "chillers", [])]
+
     def modbus_units(self) -> Dict[int, Any]:
         """Units whose vendor speaks Modbus TCP: served by this plant's Modbus server (runner)."""
         return modbus_units(self, self.chillers)
@@ -872,7 +876,7 @@ class ChwPlant(EquipmentModel):
             u.powered = util
             u.comm_ok = not self.device_offline(c["pre"])
             for key in u.cmd_keys():
-                u.bas_write(key, self.inputs[f"{c['pre']}.{key}"])
+                u.bas_write(key, self.inputs[f"{c['pre']}.{key}"], seen=False)
             u.step(h, c["q_e"], c["q_c"], t_r, self.t_cws, p["t_room"])
         q_e_tot = sum(c["q_e"] for c in self.chillers)
         if q_e_tot > 1.0:

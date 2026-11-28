@@ -6,10 +6,9 @@ template `configs/templates/hw_plant.yaml`, schedules `configs/hw_plant/*.csv`).
 This records the 11 design questions answered in review; section 14
 describes how each part is simulated.
 
-**Source documents:** none yet. The Lochinvar Crest manuals could not be
-fetched from this environment. Every Crest-specific value below (timings,
-limits, lockout list, BACnet object names) is an **assumption**, marked *(A)*,
-to be checked against the Crest manuals and BMS points list (see section 13).
+**Source documents:** the Crest manuals now drive the boiler: see
+[BOILER_CREST.md](BOILER_CREST.md). Plant-side values not from a manual are
+still marked *(A)*.
 
 ## 1. Plant arrangement
 
@@ -31,68 +30,24 @@ Primary/secondary with a common-pipe decoupler.
   - **Secondary > primary:** return water mixes into the building supply, so the supply temperature drops.
   - Sign convention: **+ = supply → return** (primary excess).
 
-## 2. Boilers (B-1..3): Lochinvar Crest FBN4001, Mode B
+## 2. Boilers (B-1..3): Lochinvar Crest FCB4000N, Mode B
 
-- **Rating:** 4,000 MBH input each, condensing, 25:1 turndown (4–100 % = 160–4,000 MBH).
+The boilers now follow the Crest manuals. Their sequence, limits, codes,
+BACnet object list, BAS timer and the configuration bits the ALC must write
+are in **[BOILER_CREST.md](BOILER_CREST.md)** (design:
+[CREST_DESIGN.md](CREST_DESIGN.md)). The *(A)* values this section used to
+carry are replaced there.
+
+- **Rating:** 3,999 MBH input each, condensing, 20:1 turndown (200-3,999 MBH).
 - **Design flow:** about 400 gpm at a 20 °F ΔT.
-- **BACnet interface:** the boiler's own interface (SMART TOUCH BMS option), simulated as a BACnet/IP device like the York gateway.
-- **Control mode:** BMS control with **direct firing-rate writes**. There is no Lochinvar cascade.
-  - The ALC controller writes enable and firing rate (0–100 %).
-  - The trainees' loop holds supply temperature, reset, staging and rotation.
-- **Display (web page):** a Local / BMS switch and a Reset button.
-  - In Local the boiler runs on its own internal setpoint (180 °F) and ignores BMS commands *(A)*.
-
-### Sequence *(A)*
-1. A call for heat starts it: BMS enable plus a firing rate above the start threshold (5 %).
-2. Permissives are checked: flow switch, low water cutoff, gas pressure, combustion air louver proven, emergency stop not pressed, power available.
-3. Pre-purge, 10 s.
-4. Ignition trial, 4 s. Flame is proven by the flame signal.
-5. Low-fire hold at ignition rate (40 %) for 30 s.
-6. Modulation: it follows the commanded rate, clamped to 4–100 % and to any active limit cut-back.
-7. Rate below 4 % or enable off: burner off, then 30 s post-purge.
-8. Anti-short-cycle: 60 s off before it will relight.
-9. Ignition retries: up to 3 tries, then a flame failure lockout.
-
-### Limits *(A)*
-- **Rate cut-back:**
-  - supply above 190 °F;
-  - rise across the heat exchanger above 40 °F;
-  - high flue temperature, or flue/condensate blockage.
-- **200 °F operating limit:** auto reset (blocking).
-- **210 °F high limit:** manual reset (lockout).
+- **Control:** BMS firing rate by default (`boiler_bms_mode: rate`), or BMS
+  setpoint. There is no Lochinvar cascade. The trainees' loop holds supply
+  temperature, reset, staging and rotation.
 
 ### Efficiency
 - Combustion efficiency depends on return water temperature: about 95–96 % at 80 °F return, falling to about 87 % above 140 °F (dew point about 130 °F).
 - Low firing rates improve it slightly. Heat exchanger scaling lowers it and raises the flue temperature.
 - Condensate flow is calculated (about 0 above dew point).
-
-### Fault classes *(A)*
-- **Blocking (non-latching, auto-restart):**
-  - loss of flow;
-  - louver not proven;
-  - low/high gas pressure;
-  - power loss;
-  - emergency stop;
-  - operating limit;
-  - BMS communication loss: holds the last rate 60 s, then shuts down;
-  - unstable flame dropout.
-- **Lockout (latched until Reset on the display):**
-  - flame failure after 3 tries;
-  - manual-reset high limit;
-  - low water cutoff;
-  - gas valve fault;
-  - blocked flue or condensate.
-- **Power loss never latches.**
-
-### BACnet objects *(A, placeholder names)*
-
-| Kind | Names |
-|---|---|
-| Writable | `BMS ENABLE` (BV), `BMS FIRING RATE` (AV, %), `BMS COMM TIMEOUT` handled internally |
-| Readouts | `SUPPLY TEMP`, `RETURN TEMP`, `FLUE TEMP`, `FIRING RATE`, `INPUT MBH`, `FLAME SIGNAL`, `EFFICIENCY`, `RUN HOURS`, `CYCLES`, `BOILER PUMP REQUEST`, `FLOW SWITCH`, `LWCO`, `LOCAL/BMS`, `ALARM` |
-| Multi-state, with text | `STATUS` (standby, purge, ignition, low fire hold, running, post-purge, anti-cycle, blocked, lockout), `LOCKOUT CODE`, `BLOCKING CODE` |
-
-All object definitions are in one table, so real Lochinvar names and instance numbers can be dropped in later.
 
 ## 3. Pumps (all on ACH580 VFDs, hardwired)
 
@@ -228,17 +183,13 @@ All object definitions are in one table, so real Lochinvar names and instance nu
    The pump drives' 15 Hz minimum frequency gives about 110 gpm, so turning a
    primary pump all the way down opens the flow switch.
 
-1. **Lochinvar Crest manuals** are needed to replace the *(A)* values:
-   - the Installation & Operation manual;
-   - the service manual (FB-SER);
-   - the SMART TOUCH BMS / BACnet points list.
-
-   They affect sequence timings, limits, the lockout and blocking code lists, and object names and instance numbers.
+1. **Lochinvar Crest manuals:** received and applied (I&O FCB Rev U, ModBus /
+   BACnet Rev X); see [BOILER_CREST.md](BOILER_CREST.md) for what is still *(A)*.
 2. **Demo logic** (stand-in, demo mode only):
    - OA reset 160 °F at 0 °F → 120 °F at 60 °F;
    - lead/lag staging: add above 80 % for 10 min, drop when below 30 % with one fewer boiler, weekly rotation;
    - primary pump starts before its boiler and runs 2 min after;
-   - PI on supply temperature writes the firing rate;
+   - PI on supply temperature writes the firing rate, with AV0 = 5 and AV1 written every 20 s at most (inside the 120 s BAS timer);
    - secondary pumps on DP with remote trim;
    - EOB valves hold 10 °F below setpoint;
    - louver open with any boiler enabled;

@@ -102,6 +102,7 @@ def unit_kw(model, split: bool = False):
 
 class GenUnit:
     """Modbus unit for one generator: the genset vendor's register map."""
+    INPUT_AS_HOLDING = True          # function 4 reads the same 4xxxx image (as before)
 
     def __init__(self, plant: "GenPlant", g: Dict[str, Any]):
         self.plant, self.g = plant, g
@@ -119,6 +120,8 @@ class GenUnit:
 
 
 class MasterUnit:
+    INPUT_AS_HOLDING = True
+
     def __init__(self, plant: "GenPlant"):
         self.plant = plant
 

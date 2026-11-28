@@ -20,6 +20,8 @@ surface and its family's, so the make and model is a CSV column.
 
 from __future__ import annotations
 
+import struct
+import time
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from ..base import ParamInfo, SignalDef, coerce
@@ -118,11 +120,28 @@ class VendorEquipment:
     powered = True
     comm_ok = True
 
-    def bas_write(self, key: str, value: Any) -> None:
-        """The BAS wrote a command object.  Default: an attribute of the same name."""
+    bas_idle_s = 0.0                             # real seconds since the BAS last wrote (set by the runner)
+
+    def bas_write(self, key: str, value: Any, seen: bool = True) -> None:
+        """
+        A command object's value.  seen=True: the BAS just wrote it (restarts a vendor's BAS
+        timer); the plants re-apply their inputs every step with seen=False.
+        """
         if key not in self.cmd_keys():
             raise KeyError(f"{self.DISPLAY}: {key!r} is not a command object")
         setattr(self, key, value)
+        if seen:
+            self.bas_idle_s = 0.0
+
+    @classmethod
+    def bas_setup_writes(cls, mode: str = "") -> Dict[str, Any]:
+        """Object values a BAS must write besides its commands (e.g. the Crest's configuration bits)."""
+        return {}
+
+    @classmethod
+    def encode_role(cls, role: str, value: Any, settings: Optional[Dict[str, Any]] = None) -> Any:
+        """An engineering value for a write role -> what the BAS writes to that object."""
+        return value
 
     def points(self) -> Dict[str, Any]:
         raise NotImplementedError
@@ -167,31 +186,43 @@ class VendorEquipment:
         setattr(self, name, v)
 
     # ---------------------------------------------------------------- Modbus (PROTOCOL "modbus_tcp")
-    # A Modbus vendor lists holding / input registers in OBJECTS, numbered as its manual numbers
-    # them (4xxxx), with an optional 7th element: the scale (register = value x scale, default 1).
-    # Signed values are two's complement; a vendor with 32-bit values or other encodings
-    # overrides modbus_registers() / modbus_write() (the Cummins genset does).
+    # A Modbus vendor lists its points in OBJECTS with kind coil (0xxxx), discrete-input (1xxxx),
+    # input-register (3xxxx) or holding-register (4xxxx), numbered as its manual numbers them,
+    # and an optional 7th element: the scale (register = value x scale, default 1) or "float32"
+    # (IEEE 754 in two registers, high word first).  16-bit values are two's complement.
+    # A vendor with other encodings overrides modbus_registers() / modbus_write() (the Cummins does).
     UNLISTED_REGISTER = 0                        # what a read of an unlisted register in a block returns
+    MODBUS_KINDS = ("coil", "discrete-input", "input-register", "holding-register")
 
     @classmethod
     def modbus_objects(cls) -> List[Tuple]:
-        return [o for o in cls.OBJECTS if o[0] in ("holding-register", "input-register")]
+        return [o for o in cls.OBJECTS if o[0] in cls.MODBUS_KINDS]
 
     def modbus_registers(self, pf: float = 1.0) -> Dict[int, int]:
+        """Register / bit image by Modbus number (1-9999 coils, 1xxxx inputs, 3xxxx, 4xxxx registers)."""
         pts = self.points()
         out: Dict[int, int] = {}
+        tables: Dict[int, List[int]] = {}
         for o in self.modbus_objects():
-            scale = o[6] if len(o) > 6 else 1.0
+            reg, enc = int(o[1]), (o[6] if len(o) > 6 else 1.0)
             v = pts.get(o[3], 0)
-            out[int(o[1])] = int(round(float(v) * scale)) & 0xFFFF
-        if out:
-            for reg in range(min(out), max(out) + 1):
+            if o[0] in ("coil", "discrete-input"):
+                out[reg] = 1 if v else 0
+            elif enc == "float32":
+                hi, lo = struct.unpack(">HH", struct.pack(">f", float(v)))
+                out[reg], out[reg + 1] = hi, lo
+                tables.setdefault(reg // 10000, []).append(reg + 1)
+            else:
+                out[reg] = int(round(float(v) * float(enc))) & 0xFFFF
+            tables.setdefault(reg // 10000, []).append(reg)
+        for regs in tables.values():                 # holes inside each table read UNLISTED_REGISTER
+            for reg in range(min(regs), max(regs) + 1):
                 out.setdefault(reg, self.UNLISTED_REGISTER)
         return out
 
     @classmethod
-    def modbus_command(cls, reg: int) -> Optional[Tuple[str, float]]:
-        """(key, scale) of the command object at a register, or None if it is not writable."""
+    def modbus_command(cls, reg: int) -> Optional[Tuple[str, Any]]:
+        """(key, scale or "float32") of the writable object at a coil / holding register number, or None."""
         for o in cls.modbus_objects():
             if int(o[1]) == int(reg) and o[5] == "cmd":
                 return o[3], (o[6] if len(o) > 6 else 1.0)
@@ -310,6 +341,7 @@ class VendorModbusUnit:
         self.plant, self.row = plant, row
         self._t = None
         self._regs: Dict[int, int] = {}
+        self._pending: Dict[int, int] = {}
 
     @property
     def unit(self) -> VendorEquipment:
@@ -325,12 +357,27 @@ class VendorModbusUnit:
         return self._regs.get(reg)
 
     def write(self, reg: int, value: int) -> bool:
-        cmd = type(self.unit).modbus_command(reg)
+        cls = type(self.unit)
+        cmd = cls.modbus_command(reg)
         if cmd is None:
-            return False
-        key, scale = cmd
+            prev = cls.modbus_command(reg - 1)        # low word of a float32 command
+            if prev is None or prev[1] != "float32":
+                return False
+            hi = self._pending.pop(reg - 1, self.read(reg - 1) or 0)
+            v = struct.unpack(">f", struct.pack(">HH", hi & 0xFFFF, value & 0xFFFF))[0]
+            return self._set(prev[0], v)
+        key, enc = cmd
+        if enc == "float32":
+            self._pending[reg] = value                # wait for the low word
+            return True
+        if reg < 10000:                               # coil
+            return self._set(key, bool(value))
         v = value - 65536 if value >= 32768 else value
-        self.plant.set_input(f"{self.row['pre']}.{key}", v / scale)
+        return self._set(key, v / float(enc))
+
+    def _set(self, key: str, value: Any) -> bool:
+        self.plant.set_input(f"{self.row['pre']}.{key}", value)
+        self.unit.bas_last_write = time.monotonic()
         self._t = None
         return True
 
