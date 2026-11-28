@@ -7,6 +7,9 @@ condenser heat balance and the refrigerant saturation temperatures.  Every
 chiller uses it, so two vendors with the same ratings make the same tons and
 kW on the same plant; they differ in their controls, codes and integration.
 
+A vendor with constant speed and inlet guide vanes sets PART_LOAD_CURVE = "igv":
+kW below 60 % load rises by up to 15 % (A: the typical published IPLV gap).
+
 The vendor sets self.cap (fraction of design tons) from its own capacity
 control, and says whether the compressor is running (self.running) and
 whether it is coasting down after a stop (coasting=True).
@@ -19,6 +22,7 @@ from typing import Any, Dict, Set
 
 class ChillerCore:
     faults: Set[str]
+    PART_LOAD_CURVE = "vsd"                       # "vsd" (variable speed) or "igv" (constant speed, guide vanes)
 
     def _init_core(self, cfg: Dict[str, Any]) -> None:
         self.capacity = float(cfg.get("capacity_tons", 1200.0))
@@ -69,6 +73,8 @@ class ChillerCore:
             lift_ratio = max(0.3, self.lift / self.lift_d)
             f_plr = 1.0 + 0.35 * (1.0 - plr) ** 2 - 0.15 * (1.0 - plr)
             fouling = 1.0
+            if self.PART_LOAD_CURVE == "igv":         # constant speed, inlet guide vanes: flatter part load (A)
+                f_plr *= 1.0 + 0.15 * max(0.0, (0.6 - plr) / 0.6)
             self.kw = self.kw_d * plr * f_plr * lift_ratio ** 1.15 * fouling + 0.012 * self.kw_d
         else:
             self.kw = 0.0

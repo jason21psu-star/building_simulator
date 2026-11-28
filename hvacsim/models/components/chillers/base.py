@@ -26,7 +26,8 @@ GENERIC_FAULTS = {
 }
 
 WRITE_ROLES = ("run_cmd", "chws_sp", "demand_limit")
-READ_ROLES = ("running", "alarm", "lchwt", "echwt", "lcwt", "ecwt", "pct_load", "kw", "ready", "local")
+READ_ROLES = ("running", "alarm", "lchwt", "echwt", "lcwt", "ecwt", "pct_load", "kw", "ready", "local",
+              "pump_request")
 
 
 class Chiller(ChillerCore, VendorEquipment):

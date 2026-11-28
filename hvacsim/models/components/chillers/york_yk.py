@@ -180,7 +180,8 @@ class YorkYK(Chiller):
     OBJECTS = YK_OBJECTS
     ROLES = {"run_cmd": "rem_run", "chws_sp": "rem_sp", "demand_limit": "rem_cur_limit",
              "running": "motor_run", "alarm": None, "lchwt": "lchwt", "echwt": "echwt", "lcwt": "lcwt",
-             "ecwt": "ecwt", "pct_load": "pct_fla", "kw": "kw", "ready": None, "local": None}
+             "ecwt": "ecwt", "pct_load": "pct_fla", "kw": "kw", "ready": None, "local": None,
+             "pump_request": "chl_pump"}
     PANEL = ["remote", "local", "run", "stop", "reset"]
     PANEL_PARAMS = {"local_sp": ParamInfo("", "Local leaving chilled liquid setpoint", "panel", "°F",
                                           minimum=38, maximum=70)}

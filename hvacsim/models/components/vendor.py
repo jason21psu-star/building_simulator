@@ -53,6 +53,9 @@ class VendorEquipment:
     FAULT_ALIASES: Dict[str, str] = {}           # generic name -> the vendor's key, where they differ
     CODE_TABLES: Dict[str, Dict[int, str]] = {}  # the vendor's status / fault code texts
     BINARY_CMD_TEXT: Tuple[str, str] = ("ON", "OFF")   # active / inactive text of binary command objects
+    BINARY_TEXTS: Dict[str, Tuple[str, str]] = {}      # per-object active / inactive texts (overrides the above)
+    CMD_STATES: Dict[str, Tuple[Dict[int, str], int]] = {}   # multi-state command objects: (texts by code, count)
+    HARDWIRED_INPUTS: Dict[str, Tuple[str, bool]] = {}  # field contacts the plant wires: key -> (description, normal)
     DEVICE_MODEL_NAME = ""                       # BACnet device model name
     DEFAULT_DESCRIPTION = ""                     # device description when the CSV row has none
 
@@ -169,6 +172,9 @@ class VendorEquipment:
     def panel(self, key: str) -> None:
         raise KeyError(key)
 
+    def set_hardwired(self, key: str, closed: bool) -> None:
+        """A field contact the plant wires to the equipment (HARDWIRED_INPUTS)."""
+
     def panel_param(self, name: str) -> Any:
         if name not in self.PANEL_PARAMS:
             raise KeyError(name)
@@ -206,6 +212,8 @@ class VendorEquipment:
         for o in self.modbus_objects():
             reg, enc = int(o[1]), (o[6] if len(o) > 6 else 1.0)
             v = pts.get(o[3], 0)
+            if isinstance(o[5], tuple) or o[3] in self.CMD_STATES:
+                v = int(v) + 1                       # multi-state: state codes count from 1 on the wire
             if o[0] in ("coil", "discrete-input"):
                 out[reg] = 1 if v else 0
             elif enc == "float32":
@@ -290,7 +298,7 @@ def signal_defs(cls: Type[VendorEquipment], pre: str, cfg: Dict[str, Any]) -> Tu
     for kind, _a, oname, key, units, role in (o[:6] for o in cls.OBJECTS):
         name = f"{pre}.{key}"
         if role == "cmd":
-            if kind.startswith("binary"):
+            if kind.startswith("binary") or kind == "coil":
                 inputs.append(SignalDef(name, "binary", description=oname, default=bool(cls.cmd_default(key, cfg))))
             else:
                 inputs.append(SignalDef(name, "analog", units or "noUnits", oname, float(cls.cmd_default(key, cfg))))
@@ -310,9 +318,13 @@ def bacnet_device(cls: Type[VendorEquipment], row: Dict[str, Any], kind: str) ->
     for okind, n, oname, key, units, role in (o[:6] for o in cls.OBJECTS):
         obj = f"{okind},{n}"
         if role == "cmd":
-            d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
+            d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname,
+                 "relinquish_default": cls.cmd_default(key, row)}
             if okind.startswith("binary"):
-                d.update(active_text=cls.BINARY_CMD_TEXT[0], inactive_text=cls.BINARY_CMD_TEXT[1])
+                on, off = cls.BINARY_TEXTS.get(key, cls.BINARY_CMD_TEXT)
+                d.update(active_text=on, inactive_text=off)
+            elif okind.startswith("multi-state"):
+                d["states"] = state_texts(*cls.CMD_STATES[key])
             else:
                 d["units"] = units
             cmds.append(d)
@@ -322,6 +334,8 @@ def bacnet_device(cls: Type[VendorEquipment], row: Dict[str, Any], kind: str) ->
             d = {"object": obj, "name": oname, "signal": f"{pre}.{key}"}
             if units:
                 d["units"] = units
+            if key in cls.BINARY_TEXTS:
+                d["active_text"], d["inactive_text"] = cls.BINARY_TEXTS[key]
             mons.append(d)
     return {"tag": row["tag"], "pre": pre, "sim_device": int(row["sim_device"]), "mac": int(row["mac"]),
             "model_name": cls.DEVICE_MODEL_NAME or f"{cls.DISPLAY} (simulated)",
@@ -372,6 +386,8 @@ class VendorModbusUnit:
             return True
         if reg < 10000:                               # coil
             return self._set(key, bool(value))
+        if key in cls.CMD_STATES:                     # multi-state: 1-based on the wire
+            return self._set(key, float(value - 1))
         v = value - 65536 if value >= 32768 else value
         return self._set(key, v / float(enc))
 

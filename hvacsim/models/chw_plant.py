@@ -242,6 +242,9 @@ class ChwPlant(EquipmentModel):
                 faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
             for g, k in cls.fault_aliases().items():
                 self.fault_alias[f"{pre}_{g}"] = f"{pre}_{k}"
+            for k, (desc, normal) in cls.HARDWIRED_INPUTS.items():     # e.g. Trane external auto-stop / E-stop
+                inputs.append(SignalDef(f"{pre}_{k}", "binary", description=f"{tag} {desc}", default=normal))
+                ctl(dev)["bo"].append(f"{pre}_{k}")
             faults.append(FaultDef(f"{pre}_chw_flow_zero", f"{tag} evaporator flow meter reads 0", "Sensors"))
             for k, i in cls.PANEL_PARAMS.items():
                 info[f"{pre}.{k}"] = ParamInfo(i.id, i.label, f"{tag} {i.group}", i.units,
@@ -877,6 +880,8 @@ class ChwPlant(EquipmentModel):
             u.comm_ok = not self.device_offline(c["pre"])
             for key in u.cmd_keys():
                 u.bas_write(key, self.inputs[f"{c['pre']}.{key}"], seen=False)
+            for k in u.HARDWIRED_INPUTS:
+                u.set_hardwired(k, bool(self.inputs[f"{c['pre']}_{k}"]))
             u.step(h, c["q_e"], c["q_c"], t_r, self.t_cws, p["t_room"])
         q_e_tot = sum(c["q_e"] for c in self.chillers)
         if q_e_tot > 1.0:

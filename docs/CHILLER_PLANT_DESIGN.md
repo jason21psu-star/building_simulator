@@ -337,7 +337,7 @@ is 1 − (1 − position)³. A closed valve leaks 0.2 %, or 5 % with the seat
 leak fault. The end switches trip at 98 % open and 2 % closed. With the
 end switch fault, "open" trips at 80 %.
 
-**Chiller (`components/chillers/york_yk.py`, behind the chiller interface: [EQUIPMENT_INTERFACE_DESIGN.md](EQUIPMENT_INTERFACE_DESIGN.md)).**
+**Chiller (CH-3 on station 1 is a Trane CenTraVac: [CHILLER_TRANE_CVHE.md](CHILLER_TRANE_CVHE.md)). YORK YK (`components/chillers/york_yk.py`, behind the chiller interface: [EQUIPMENT_INTERFACE_DESIGN.md](EQUIPMENT_INTERFACE_DESIGN.md)).**
 - **State machine:** pre-lube 50 s, VSD ramp 30 s, run, soft stop,
   coastdown 150 s.
 - **Capacity:** follows the leaving chilled liquid error at up to +0.4 %/s

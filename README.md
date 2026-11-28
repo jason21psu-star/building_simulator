@@ -27,7 +27,7 @@ that network, the same way MS/TP devices sit behind a router:
            ├── SF-2-VFD  device 4010012  address 5001:12  DI1/AI1 terminals (hardwired)
            ├── SF-3-VFD  device 4010013  address 5001:13  Yaskawa Z1000, S1/A1 terminals (hardwired)
            ├── SF-4-VFD  device 4010014  address 5001:14  Yaskawa Z1000 BACnet objects (fieldbus)
-           ├── CH-1…3    device 4010031-033  address 5001:31-33  YORK YK OptiView BAS objects (Mode B)
+           ├── CH-1…3    device 4010031-033  address 5001:31-33  CH-1/2 YORK YK OptiView, CH-3 Trane CVHE Symbio 800 (Mode B)
            ├── CHP-1 I/O device 4010041-044  address 5001:41-44  plant BO/AO terminals for ALC 241001-241004
            ├── B-1…3     device 4010051-053  address 5001:51-53  Lochinvar Crest BMS objects (Mode B)
            ├── HWP-1 I/O device 4010061-064  address 5001:61-64  plant BO/AO terminals for ALC 242001-242012
@@ -55,7 +55,7 @@ that network, the same way MS/TP devices sit behind a router:
 | `weather_station` | B (ALC reads it) | Shared outdoor air temp/RH for the ALC system and every simulator on the host. Derived dew point, enthalpy and wet bulb, sensor faults, "device offline" |
 | `ahu_vav_econ` | A (virtual I/O) | VAV AHU with economizer, 4-fan supply array with barometric dampers, return fan: 5 ACH580-style drives, preheat / CHW / HW coils with 2-way valves, steam humidifier with high limit, freezestat / high-static / smoke safety chain to drive DI4, aggregate VAV + building model. 43 hardware points. See [docs/AHU_DESIGN.md](docs/AHU_DESIGN.md) |
 | `vav_rh` | A (virtual I/O) | Single-duct VAV with HW reheat, no fan: integrated 154 s damper actuator, airflow in cfm, 2-10 V reheat valve, zone with loads / humidity / CO2, zone sensor setpoint adjust (±1-5 °F) and override button (+30 min, max 120). Sits in an AHU's duct (`served_by`). Boxes come from a CSV schedule. See [docs/VAV_DESIGN.md](docs/VAV_DESIGN.md) |
-| `chw_plant` | A + B | Chilled water plant: YORK YK VSD chillers (Mode B, OptiView BAS object list and status codes), headered primary / condenser pumps and UPS-backed secondary pumps on ACH580 drives, motorized isolation valves with end switches, cooling tower cells with basins / bypass / equalizer, stratified thermal storage tanks as the decoupler, risers with remote DP, building load, utility power failure. Equipment from one CSV per type. See [docs/CHILLER_PLANT_DESIGN.md](docs/CHILLER_PLANT_DESIGN.md) |
+| `chw_plant` | A + B | Chilled water plant: YORK YK VSD and Trane CenTraVac chillers (Mode B, their own BACnet object lists and codes), headered primary / condenser pumps and UPS-backed secondary pumps on ACH580 drives, motorized isolation valves with end switches, cooling tower cells with basins / bypass / equalizer, stratified thermal storage tanks as the decoupler, risers with remote DP, building load, utility power failure. Equipment from one CSV per type. See [docs/CHILLER_PLANT_DESIGN.md](docs/CHILLER_PLANT_DESIGN.md) |
 | `hw_plant` | A + B | Hot water plant: Lochinvar Crest condensing boilers (Mode B, BMS enable + firing rate, ignition sequence, blocking / lockout codes, efficiency by return temperature), dedicated primary pumps and headered secondary pumps on ACH580 drives, common-pipe decoupler with a bidirectional flow meter, branches with remote DP and end-of-branch 3-way valves, combustion air louver, gas pressure, emergency stop, expansion tank / loop pressure, OA-driven heating load with morning warm-up, utility power failure. Feeds AHU-1, the VAV reheat coils and UH-1. See [docs/HW_PLANT_DESIGN.md](docs/HW_PLANT_DESIGN.md) |
 | `gen_plant` | A + B (Modbus TCP) | Natural gas generator plant: 4 × 1,000 kW Cummins gensets paralleled N+1, each a Modbus TCP unit serving the PowerCommand 3.x register map (run states, metering, NFPA 110 bitmaps, real fault codes, remote start / fault reset), a DMC 1500-style paralleling master (unit 5), ATSs with open transition to the generators and closed transition back, ALC transfer inhibits, load demand, frequency dips on load steps, overload shedding and underfrequency trips. Every other instance gets its power from an ATS (`ats: ATS-n`). See [docs/GENERATOR_DESIGN.md](docs/GENERATOR_DESIGN.md) |
 | `vfd_fan` | A or B | A VFD driving a plenum fan, **ABB ACH580 or Yaskawa Z1000** (`drive_model`): keypad Hand/Off/Auto, the drive's own parameters, terminals and fault codes, hardwired or BACnet fieldbus control. See [docs/VFD_ACH580.md](docs/VFD_ACH580.md), [docs/VFD_Z1000.md](docs/VFD_Z1000.md) |
@@ -147,8 +147,12 @@ and `pchwp2_vfd_flt`. Each point belongs to the ALC controller in that row's
 | 241004 | 4010044 | tanks (`tkN_temp_01` top … `_10` bottom), `dcplr_flow` (+ charging), TES header temperatures |
 | 241011 / 241012 | — | `chw_remote_dp` for the East / West riser |
 
-**Chillers (Mode B).** Each chiller is its own device (`CH-1` 4010031 …)
-serving the YORK YK OptiView BAS object list.
+**Chillers (Mode B).** Each chiller is its own device (`CH-1` 4010031 …).
+CH-1 and CH-2 are YORK YKs serving the OptiView BAS object list (below).
+CH-3 is a Trane CenTraVac CVHE with the Symbio 800 points list: Auto/Stop,
+differential to start, its own pump requests and flow-proving timers, and
+one BI per diagnostic ([docs/CHILLER_TRANE_CVHE.md](docs/CHILLER_TRANE_CVHE.md)).
+For the YORK:
 - **Commands:** `REM RUN STOP CMD` (BV1), `REM LEAVING CH LIQ TEMP SP` (AV1)
   and `REM MOTOR CURRENT SP` (AV2).
 - **Status codes:** multi-state values MV1-MV8. The BACnet value is the
@@ -438,8 +442,8 @@ The `model` column in the plant CSV picks the vendor, row by row:
 
 | Plant | CSV | Registered models (default first) |
 |---|---|---|
-| Chilled water | `chillers.csv` | `york_yk` |
-| Hot water | `boilers.csv` | `lochinvar_crest` |
+| Chilled water | `chillers.csv` | `york_yk`, `trane_cvhe`, `trane_cvhe_modbus` |
+| Hot water | `boilers.csv` | `lochinvar_crest`, `lochinvar_crest_modbus` |
 | Generator | `generators.csv` | `cummins_pcc33` |
 
 **What a swap changes:**
@@ -490,7 +494,7 @@ hvacsim/
   models/vav.py          VAV box with reheat and its zone
   models/chw_plant.py    Chilled water plant (hydraulics, TES, towers, building risers)
   models/components/vendor.py    Shared vendor interface, registry, BACnet / Modbus integration builder
-  models/components/chillers/    Chiller interface, shared thermal core, york_yk.py (YORK YK + OptiView objects)
+  models/components/chillers/    Chiller interface, shared thermal core, york_yk.py (YORK YK), trane_cvhe.py (CenTraVac)
   models/components/hydronic.py  Pumps, isolation valves, pump/system solves, stratified tank, R-134a
   models/components/tower.py     Cooling tower cell with basin
   models/hw_plant.py     Hot water plant (boilers, primary/secondary, decoupler, branches)

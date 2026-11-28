@@ -9,7 +9,7 @@
 #            ├── UH-1-SIM  device 4010001  MAC 1   -> 5001:1
 #            ├── UH-2-SIM  device 4010002  MAC 2   -> 5001:2
 #            ├── ...       (VFDs, AHU-1, VAV-1..6, WX-1)
-#            ├── CH-1..3   devices 4010031-033  MAC 31-33  (YORK OptiView BAS objects)
+#            ├── CH-1..3   devices 4010031-033  MAC 31-33  (CH-1/2 YORK OptiView, CH-3 Trane Symbio 800)
 #            ├── CHP-1 I/O devices 4010041-044  MAC 41-44  (one per ALC plant controller)
 #            ├── B-1..3    devices 4010051-053  MAC 51-53  (Lochinvar Crest FCB BACnet objects)
 #            ├── HWP-1 I/O devices 4010061-064  MAC 61-64  (one per ALC plant controller)

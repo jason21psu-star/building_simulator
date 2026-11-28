@@ -1,6 +1,12 @@
 # Trane CenTraVac CVHE with Symbio 800: design (for review)
 
-Status: **for review, nothing built.** This is the second chiller behind the
+Status: **built** (user doc: [CHILLER_TRANE_CVHE.md](CHILLER_TRANE_CVHE.md)). All
+eight questions were built with their proposed defaults. Two details were
+settled in the build: the demand limit has a 40 % RLA minimum *(A)*, and
+condenser-flow diagnostics don't block the next start, because the start
+re-proves condenser flow.
+
+Originally: This is the second chiller behind the
 chiller interface ([EQUIPMENT_INTERFACE_DESIGN.md](EQUIPMENT_INTERFACE_DESIGN.md)),
 next to the YORK YK. It is one new file, `components/chillers/trane_cvhe.py`,
 registered as `trane_cvhe`. It must pass the chiller conformance tests.

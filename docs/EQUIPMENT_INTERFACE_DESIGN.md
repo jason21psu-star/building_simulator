@@ -1,7 +1,11 @@
 # Chiller, boiler and generator interfaces: design (for review)
 
 Status: **built** (build steps 1-6 in section 11). Step 7, the second vendor
-in each family, waits for its manuals. This is step 2 of the modularization
+in each family: the Trane CenTraVac CVHE chiller is built
+([CHILLER_TRANE_CVHE.md](CHILLER_TRANE_CVHE.md)). The Lochinvar Crest was
+rebuilt from its manuals ([BOILER_CREST.md](BOILER_CREST.md)), with a Modbus
+variant. A second boiler vendor and a second genset vendor wait for their
+manuals. This is step 2 of the modularization
 plan:
 1. Drive interface: built ([DRIVE_INTERFACE_DESIGN.md](DRIVE_INTERFACE_DESIGN.md)).
 2. **Vendor interfaces for chillers, boilers and generators: this document.**

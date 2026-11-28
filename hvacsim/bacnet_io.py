@@ -38,7 +38,8 @@ from bacpypes3.basetypes import BinaryPV, EngineeringUnits, ObjectType, Property
 from bacpypes3.errors import PropertyError
 from bacpypes3.local.analog import AnalogInputObject, AnalogOutputObject, AnalogValueObject, AnalogValueObjectCmd
 from bacpypes3.local.binary import BinaryInputObject, BinaryOutputObject, BinaryValueObject, BinaryValueObjectCmd
-from bacpypes3.local.multistate import MultiStateValueObject
+from bacpypes3.local.cmd import Commandable
+from bacpypes3.local.multistate import MultiStateInputObject, MultiStateValueObject
 from bacpypes3.local.networkport import NetworkPortObject
 from bacpypes3.pdu import Address
 from bacpypes3.primitivedata import ObjectIdentifier, Real, Unsigned
@@ -94,6 +95,10 @@ class ReadOnlyMultiStateValue(_ReadOnlyPV, MultiStateValueObject):
     pass
 
 
+class ReadOnlyMultiStateInput(_ReadOnlyPV, MultiStateInputObject):
+    pass
+
+
 class _Stamped:
     """Mix-in: remember when Present_Value was last written over the network (comm-loss supervision)."""
 
@@ -121,6 +126,12 @@ class CmdAnalogValue(_Stamped, AnalogValueObjectCmd):
     pass
 
 
+class CmdMultiStateValue(_Stamped, Commandable, MultiStateValueObject):
+    """Commandable multi-state value (e.g. Trane Chiller Mode Command BAS)."""
+
+    _required = ("priorityArray",)
+
+
 class ParamAnalogValue(_Stamped, AnalogValueObject):
     """Writable, non-commandable AV mapped to a model parameter (e.g. ACCEL1 TIME)."""
 
@@ -130,6 +141,7 @@ COMMAND_CLASSES = {
     "binary-value": CmdBinaryValue,
     "analog-output": CmdAnalogOutput,
     "analog-value": CmdAnalogValue,
+    "multi-state-value": CmdMultiStateValue,
 }
 
 MONITOR_CLASSES = {
@@ -140,6 +152,7 @@ MONITOR_CLASSES = {
     "analog-output": ReadOnlyAnalogOutput,
     "binary-output": ReadOnlyBinaryOutput,
     "multi-state-value": ReadOnlyMultiStateValue,
+    "multi-state-input": ReadOnlyMultiStateInput,
 }
 
 SHORT_TYPES = {
@@ -365,6 +378,9 @@ def add_command_points(app: Application, model: EquipmentModel, cfg: List[Dict[s
             kwargs.update(activeText=_text(c.get("active_text", "On")), inactiveText=_text(c.get("inactive_text", "Off")))
             if str(objid[0]) == "binary-output":
                 kwargs["polarity"] = "normal"
+        elif str(objid[0]).startswith("multi-state"):
+            states = [_text(x)[:60] for x in c.get("states") or ["State 0"]]
+            kwargs.update(numberOfStates=len(states), stateText=states)
         else:
             kwargs["units"] = EngineeringUnits(c.get("units", sdef.units))
         obj = cls(**kwargs)

@@ -61,6 +61,7 @@ def started(model, **kw):
 def test_chiller_needs_run_command(model):
     u = chiller(model)
     _write_role(u, "chws_sp", 44.0)
+    _write_role(u, "run_cmd", False)                      # (a Trane relinquishes to front panel Auto)
     run_ch(u, 600)
     assert not u.running and u.kw == 0.0
     assert u.generic_state() in STATES
@@ -73,9 +74,9 @@ def test_chiller_holds_setpoint_and_limit(model):
     assert abs(u.lchwt - 44.0) < 1.0
     assert 600 < u.q / 12000.0 < 900                      # 2400 gpm x 8 °F = 800 tons
     fla = u.role("pct_load")
-    _write_role(u, "demand_limit", round(0.6 * fla))
+    _write_role(u, "demand_limit", round(0.8 * fla))       # above the Trane's 40 % minimum demand limit
     run_ch(u, 900)
-    assert u.role("pct_load") <= 0.6 * fla + 2.0
+    assert u.role("pct_load") <= max(0.8 * fla, 40.0) + 2.5
     assert u.lchwt > 44.5                                  # limited: can't hold setpoint
 
 

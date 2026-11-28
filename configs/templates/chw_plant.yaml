@@ -7,7 +7,8 @@
 #  the ALC controller in the row's controller_device column.
 #
 #  BACnet devices the plant presents on the virtual network:
-#    one per chiller (sim_device / mac columns): YORK YK OptiView BAS objects
+#    one per chiller (sim_device / mac columns): the chiller vendor's BACnet objects
+#      (model column: york_yk = YORK YK OptiView, trane_cvhe = Trane Symbio 800)
 #    one I/O device per ALC controller (plant.io_devices): the BO/AO objects
 #      the controller's network outputs write ("the field wiring")
 #  Sensor values are written into the controllers' out-of-service inputs by
