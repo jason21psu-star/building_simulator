@@ -49,7 +49,7 @@ def test_start_sequence_and_registers():
     run(m, 3)
     assert read(srv, 1, 40011) == [1]                          # time delay to start / cranking
     run(m, 10)
-    gs = m.gens[0]["gen"]
+    gs = m.gens[0]["unit"]
     assert gs.state == "rated" and gs.cb_closed                # first set closes to the dead bus
     r = read(srv, 1, 40010, 40)                                 # 40010-40049 in one request
     assert r[40044 - 40010] == 6000                            # Hz x 0.01
@@ -93,7 +93,7 @@ def test_fail_to_crank_and_fail_to_start_latch():
     m = plant()
     m.set_fault("gen1_fail_to_crank", True)
     m.set_fault("gen2_fail_to_start", True)
-    g1, g2 = m.gens[0]["gen"], m.gens[1]["gen"]
+    g1, g2 = m.gens[0]["unit"], m.gens[1]["unit"]
     g1.remote_start = g2.remote_start = 1
     run(m, 20)
     assert g1.shutdown and g1.fault_code == 1438
@@ -116,7 +116,7 @@ def test_weak_battery_and_warnings():
     m = plant()
     m.set_fault("gen1_weak_battery", True)
     m.set_fault("gen1_charger_fail", True)
-    g = m.gens[0]["gen"]
+    g = m.gens[0]["unit"]
     g.remote_start = 1
     run(m, 4)
     assert g.batt_v < 18.0                                      # deep dip while cranking
@@ -130,7 +130,7 @@ def test_weak_battery_and_warnings():
 
 def test_high_coolant_shutdown():
     m = plant()
-    g = m.gens[0]["gen"]
+    g = m.gens[0]["unit"]
     g.remote_start = 1
     run(m, 30)
     m.set_fault("gen1_high_coolant", True)
@@ -177,9 +177,9 @@ def test_closed_transition_retransfer_and_cooldown():
     assert all(a["pos"] == "N" for a in m.ats)
     assert "B" in seen and not dark                             # make-before-break: no second outage
     run(m, 30)
-    assert all(g["gen"].state == "cooldown" for g in m.gens)
+    assert all(g["unit"].state == "cooldown" for g in m.gens)
     run(m, 300)
-    assert all(g["gen"].state == "stop" for g in m.gens)
+    assert all(g["unit"].state == "stop" for g in m.gens)
 
 
 def test_load_step_dips_frequency():
@@ -198,7 +198,7 @@ def test_load_step_dips_frequency():
 def test_overload_sheds_lowest_priority_then_underfrequency_trips():
     m = plant(building_kw_occ=2500.0)
     for g in m.gens[2:]:
-        g["gen"].set_switch(0)                                 # only 2 sets available
+        g["unit"].set_switch(0)                                 # only 2 sets available
     m.set_utility(False)
     run(m, 60)
     assert ats(m, "ATS-4")["shed"] and ats(m, "ATS-4")["pos"] == "O"
@@ -210,10 +210,10 @@ def test_overload_sheds_lowest_priority_then_underfrequency_trips():
     for a in m2.ats:
         a["shed_order"] = 0
     for g in m2.gens[2:]:
-        g["gen"].set_switch(0)
+        g["unit"].set_switch(0)
     m2.set_utility(False)
     run(m2, 60)
-    assert all(g["gen"].fault_code == 1448 for g in m2.gens[:2])
+    assert all(g["unit"].fault_code == 1448 for g in m2.gens[:2])
     assert not m2.bus_live()
 
 
@@ -222,7 +222,7 @@ def test_load_demand_keeps_n_plus_one():
     m.set_utility(False)
     run(m, 200, dt=1.0)
     assert m.signals["sets_online"] == 2                        # 300 kW: one needed + one spare
-    stopped = [g for g in m.gens if g["gen"].load_demand_stopped]
+    stopped = [g for g in m.gens if g["unit"].load_demand_stopped]
     assert len(stopped) == 2
     srv = ModbusTcpServer(m.modbus_units())
     assert read(srv, int(stopped[0]["unit_id"]), 40017)[0] & (1 << 3)   # extended NFPA: load demand
@@ -302,7 +302,7 @@ def test_shed_load_returns_to_normal_when_utility_returns():
     # a shed load bigger than the spare generator capacity must still come back on utility
     m = plant(building_kw_occ=2500.0)
     for g in m.gens[2:]:
-        g["gen"].set_switch(0)                                 # only 2 sets available
+        g["unit"].set_switch(0)                                 # only 2 sets available
     m.set_utility(False)
     run(m, 60)
     assert ats(m, "ATS-4")["shed"]

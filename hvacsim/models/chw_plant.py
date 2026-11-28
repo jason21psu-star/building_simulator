@@ -13,7 +13,8 @@ pchwp1_amps, ch1_chw_vlv_open, ct2_basin_temp, tk3_temp_04 ...
 
 Hardwired points belong to the ALC controller in each CSV row's
 controller_device; the chillers are Mode B devices serving the YORK
-OptiView BAS object list (components/york_yk.py).
+OptiView BAS object list (components/chillers/york_yk.py).  The chiller make
+and model is the CSV column `model` (components/chillers, docs/EQUIPMENT_INTERFACE_DESIGN.md).
 
 Hydraulics are solved every step: parallel pumps against the system curve,
 the tanks as a low-resistance decoupler (flow = primary - secondary), an
@@ -36,7 +37,8 @@ from .components.hydronic import (
 )
 from .components.tower import TowerCell
 from .components.drives import build_drive, drive_class, motor_for_hp
-from .components.york_yk import YK_FAULTS, YK_OBJECTS, YorkYK
+from .components.chillers import chiller_class
+from .components.vendor import bacnet_device, signal_defs
 
 _A = "analog"
 _F = "degreesFahrenheit"
@@ -47,7 +49,7 @@ WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 EQUIPMENT_DEFAULTS = {
     "chillers": {"capacity_tons": 1200.0, "chw_design_gpm": 2400.0, "cw_design_gpm": 3600.0,
                  "chws_design_temp": 44.0, "kw_per_ton": 0.57, "min_load_pct": 10.0,
-                 "evap_dp_ft": 20.0, "cond_dp_ft": 20.0},
+                 "evap_dp_ft": 20.0, "cond_dp_ft": 20.0, "model": "york_yk"},
     "primary_pumps": {"design_gpm": 2400.0, "design_head_ft": 60.0, "motor_hp": 50.0, "ct_range_amps": 100.0,
                       "drive_model": "ach580"},
     "secondary_pumps": {"design_gpm": 2400.0, "design_head_ft": 100.0, "motor_hp": 75.0, "ct_range_amps": 150.0,
@@ -142,6 +144,7 @@ class ChwPlant(EquipmentModel):
         "initial_basin_temp": 70.0,
         "sensor_noise": 0.03,
         "pchwp_drive": {}, "schwp_drive": {}, "cwp_drive": {}, "ct_fan_drive": {},
+        "chiller": {},                   # vendor settings, flat or per model ({"york_yk": {...}})
     }
     WEATHER_PARAMS = {"oat": "oa_temp_actual", "oa_w": "oa_w_actual"}
     CONDITIONS = ["oat", "load_scale", "t_room"]
@@ -217,20 +220,15 @@ class ChwPlant(EquipmentModel):
             for k, (txt, kind, dflt, units) in VALVE_FAULTS.items():
                 faults.append(FaultDef(f"{base}_{k}", f"{label}: {txt}", label.split(" ")[0], kind, dflt, units))
 
-        # chillers: BACnet gateway points + plant-side valves and flow meters
+        # chillers: the vendor's integration points + plant-side valves and flow meters
+        self.fault_alias: Dict[str, str] = {}
         for c in R["chillers"]:
             pre, dev, tag = c["pre"], c["controller_device"], c["tag"]
-            for kind, inst, oname, key, units, role in YK_OBJECTS:
-                if role == "cmd":
-                    if kind.startswith("binary"):
-                        inputs.append(SignalDef(f"{pre}.{key}", "binary", description=oname, default=False))
-                    else:
-                        dflt = float(c["chws_design_temp"]) if key == "rem_sp" else 100.0
-                        inputs.append(SignalDef(f"{pre}.{key}", _A, units, oname, dflt))
-                elif kind.startswith("binary"):
-                    truth(f"{pre}.{key}", kind="binary", desc=oname, default=False)
-                else:
-                    truth(f"{pre}.{key}", units or "noUnits", oname)
+            cls = chiller_class(c["model"])
+            c["model"] = cls.MODEL
+            ins, sigs = signal_defs(cls, pre, c)
+            inputs += ins
+            signals += sigs
             valve_points(dev, f"{pre}_chw_vlv", f"{tag} CHW isolation valve")
             valve_points(dev, f"{pre}_cw_vlv", f"{tag} CW isolation valve")
             ai(dev, f"{pre}_chw_flow", "usGallonsPerMinute", f"{tag} evaporator flow meter")
@@ -239,12 +237,16 @@ class ChwPlant(EquipmentModel):
             truth(f"{pre}.kw_per_ton", "noUnits", f"{tag} kW/ton")
             truth(f"{pre}.evap_dp", "poundsForcePerSquareInch", f"{tag} evaporator pressure drop")
             truth(f"{pre}.status", kind="text", desc=f"{tag} panel status", default="")
-            for k, txt in YK_FAULTS.items():
+            truth(f"{pre}.view", kind="text", desc=f"{tag} page view (json)", default="{}")
+            for k, txt in cls.FAULTS.items():
                 faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
+            for g, k in cls.fault_aliases().items():
+                self.fault_alias[f"{pre}_{g}"] = f"{pre}_{k}"
             faults.append(FaultDef(f"{pre}_chw_flow_zero", f"{tag} evaporator flow meter reads 0", "Sensors"))
-            info[f"{pre}.local_sp"] = ParamInfo("", "Local leaving chilled liquid setpoint", f"{tag} panel", "°F",
-                                                minimum=38, maximum=70)
-            actions += [f"{pre}.{k}" for k in ("remote", "local", "run", "stop", "reset")]
+            for k, i in cls.PANEL_PARAMS.items():
+                info[f"{pre}.{k}"] = ParamInfo(i.id, i.label, f"{tag} {i.group}", i.units,
+                                               minimum=i.minimum, maximum=i.maximum)
+            actions += [f"{pre}.{k}" for k in cls.PANEL]
 
         # pumps
         for g, label in PUMP_GROUPS.items():
@@ -376,37 +378,13 @@ class ChwPlant(EquipmentModel):
     # ------------------------------------------------------------------ BACnet devices (Mode B)
 
     def bacnet_devices(self) -> List[Dict[str, Any]]:
-        """The chillers' OptiView BAS gateways: one device each (used by plant_runner)."""
-        from .components.york_yk import state_texts
-        out = []
-        for c in self.chillers:
-            pre = c["pre"]
-            cmds, mons = [], []
-            for kind, n, oname, key, units, role in YK_OBJECTS:
-                obj = f"{kind},{n}"
-                if role == "cmd":
-                    d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
-                    if kind.startswith("binary"):
-                        d.update(active_text="RUN", inactive_text="STOP")
-                    else:
-                        d["units"] = units
-                    cmds.append(d)
-                elif isinstance(role, tuple):
-                    _tag, table, count = role
-                    mons.append({"object": obj, "name": oname, "signal": f"{pre}.{key}", "states": state_texts(table, count)})
-                else:
-                    d = {"object": obj, "name": oname, "signal": f"{pre}.{key}"}
-                    if units:
-                        d["units"] = units
-                    mons.append(d)
-            out.append({"tag": c["tag"], "pre": pre, "sim_device": int(c["sim_device"]), "mac": int(c["mac"]),
-                        "model_name": "YORK YK OptiView (simulated)",
-                        "description": c.get("description", "YORK YK VSD centrifugal chiller"),
-                        "kind": "chiller", "commands": cmds, "monitors": mons})
-        return out
+        """The chillers' BACnet interfaces: one device each (used by plant_runner)."""
+        return [bacnet_device(type(c["unit"]), c, "chiller") for c in self.chillers if c["unit"].PROTOCOL == "bacnet"]
 
     def device_offline(self, pre: str) -> bool:
-        return (not self.utility_ok) or self.fault(f"{pre}_gateway_offline")
+        c = self._chiller(pre)
+        key = type(c["unit"]).fault_key("comm_loss") if c else "gateway_offline"
+        return (not self.utility_ok) or self.fault(f"{pre}_{key}")
 
     def watch_states(self) -> Dict[str, str]:
         return {c["tag"]: self.signals[f"{c['pre']}.status"].split(" · ")[0] for c in self.chillers}
@@ -460,7 +438,7 @@ class ChwPlant(EquipmentModel):
             h_cb = hdr_head(qc, float(c_hd["design_head_ft"])) - self.rc_c * qc * qc - 12.0 - 5.0 - 2.0
             pipe_c = max(1.0, h_cb - float(c["cond_dp_ft"]) - 1.5)
             self.chillers.append({
-                **c, "yk": YorkYK(c["tag"], c, f),
+                **c, "unit": self._make_chiller(c, f),
                 "vchw": IsoValve(60.0), "vcw": IsoValve(60.0),
                 "r_evap": (float(c["evap_dp_ft"]) + pipe_e) / qd ** 2, "r_vchw": 1.5 / qd ** 2,
                 "r_cond": (float(c["cond_dp_ft"]) + pipe_c) / qc ** 2, "r_vcw": 1.5 / qc ** 2,
@@ -527,6 +505,11 @@ class ChwPlant(EquipmentModel):
         self._occ = False
         self._t0 = t0
 
+    def _make_chiller(self, c: Dict[str, Any], faults: set):
+        """The row's chiller, with its vendor settings (row columns, then the plant's chiller: {...})."""
+        cls = chiller_class(c["model"])
+        return cls(c["tag"], {**c, **cls.settings_for(c, self.p["chiller"])}, faults)
+
     def _make_drive(self, pre: str, hp: float, inertia: float, overrides: Dict[str, Any],
                     model: str = "ach580") -> None:
         """
@@ -565,8 +548,8 @@ class ChwPlant(EquipmentModel):
             if pre in self.drive_p:
                 return self.drive_p[pre][k]
             ch = self._chiller(pre)
-            if ch and k == "local_sp":
-                return ch["yk"].local_sp
+            if ch and k in ch["unit"].PANEL_PARAMS:
+                return ch["unit"].panel_param(k)
             raise KeyError(name)
         return self.p[name]
 
@@ -584,8 +567,8 @@ class ChwPlant(EquipmentModel):
                 self.drive_p[pre][k] = type(self.drives[pre]).check_param(k, value)
                 return
             ch = self._chiller(pre)
-            if ch and k == "local_sp":
-                ch["yk"].local_sp = max(38.0, min(70.0, float(value)))
+            if ch and k in ch["unit"].PANEL_PARAMS:
+                ch["unit"].set_panel_param(k, value)
                 return
             raise KeyError(f"no parameter {name!r}")
         super().set_param(name, value)
@@ -598,7 +581,7 @@ class ChwPlant(EquipmentModel):
             pre, key = name.split(".", 1)
             ch = self._chiller(pre)
             if ch:
-                ch["yk"].panel(key)
+                ch["unit"].panel(key)
             elif key == "vib_reset":
                 t = next((t for t in self.towers if t["pre"] == pre), None)
                 if t is None:
@@ -643,7 +626,7 @@ class ChwPlant(EquipmentModel):
         for c in self.chillers:
             f = self.faults_by[c["pre"]]
             f.clear()
-            for k in YK_FAULTS:
+            for k in type(c["unit"]).FAULTS:
                 if self.fault(f"{c['pre']}_{k}"):
                     f.add(k)
 
@@ -881,15 +864,15 @@ class ChwPlant(EquipmentModel):
             t_r = self.t_r + (p["t_room"] - self.t_r) * min(1.0, h / 3600.0)
         self.t_r = t_r
         for c in self.chillers:
-            yk = c["yk"]
-            yk.powered = util
-            yk.rem_run = bool(self.inputs[f"{c['pre']}.rem_run"])
-            yk.rem_sp = float(self.inputs[f"{c['pre']}.rem_sp"])
-            yk.rem_cur_limit = float(self.inputs[f"{c['pre']}.rem_cur_limit"])
-            yk.step(h, c["q_e"], c["q_c"], t_r, self.t_cws, p["t_room"])
+            u = c["unit"]
+            u.powered = util
+            u.comm_ok = not self.device_offline(c["pre"])
+            for key in u.cmd_keys():
+                u.bas_write(key, self.inputs[f"{c['pre']}.{key}"])
+            u.step(h, c["q_e"], c["q_c"], t_r, self.t_cws, p["t_room"])
         q_e_tot = sum(c["q_e"] for c in self.chillers)
         if q_e_tot > 1.0:
-            t_ps = sum(c["q_e"] * c["yk"].lchwt for c in self.chillers) / q_e_tot
+            t_ps = sum(c["q_e"] * c["unit"].lchwt for c in self.chillers) / q_e_tot
         else:
             t_ps = self.t_ps + (p["t_room"] - self.t_ps) * min(1.0, h / 3600.0)
         self.t_ps = t_ps
@@ -957,7 +940,7 @@ class ChwPlant(EquipmentModel):
         # ---------------- condenser water / towers ----------------
         q_c_tot = sum(c["q_c"] for c in self.chillers)
         if q_c_tot > 1.0:
-            self.t_cwr = sum(c["q_c"] * c["yk"].lcwt for c in self.chillers) / q_c_tot
+            self.t_cwr = sum(c["q_c"] * c["unit"].lcwt for c in self.chillers) / q_c_tot
         levels = [t["cell"].level_in for t in self.towers if t["f_eq"] > 0.3]
         temps = [t["cell"].basin_t for t in self.towers if t["f_eq"] > 0.3]
         l_mean = sum(levels) / len(levels) if levels else 0.0
@@ -1006,20 +989,21 @@ class ChwPlant(EquipmentModel):
         # chillers
         plant_tons = plant_kw = 0.0
         for c in self.chillers:
-            pre, yk = c["pre"], c["yk"]
-            for key, val in yk.points().items():
+            pre, u = c["pre"], c["unit"]
+            for key, val in u.points().items():
                 s[f"{pre}.{key}"] = val
-            s[f"{pre}.status"] = yk.status_text()
-            tons = yk.q / 12000.0
+            s[f"{pre}.status"] = u.status_text()
+            s[f"{pre}.view"] = json.dumps(u.view())
+            tons = u.q / 12000.0
             s[f"{pre}.tons"] = round(tons, 0)
-            s[f"{pre}.kw_per_ton"] = round(yk.kw / tons, 3) if tons > 10 else 0.0
+            s[f"{pre}.kw_per_ton"] = round(u.kw / tons, 3) if tons > 10 else 0.0
             s[f"{pre}.evap_dp"] = round(float(c["evap_dp_ft"]) * (c["q_e"] / float(c["chw_design_gpm"])) ** 2 / FT_PER_PSI, 2)
             for base, v in ((f"{pre}_chw_vlv", c["vchw"]), (f"{pre}_cw_vlv", c["vcw"])):
                 self._publish_valve(base, v)
             s[f"{pre}_chw_flow"] = 0.0 if self.fault(f"{pre}_chw_flow_zero") else round(max(0.0, c["q_e"] + self._noise(2.0)), 0)
             s[f"{pre}_cw_flow"] = round(max(0.0, c["q_c"] + self._noise(2.0)), 0)
             plant_tons += tons
-            plant_kw += yk.kw
+            plant_kw += u.kw
         # pumps
         for g, items in self.pumps.items():
             for x in items:

@@ -165,7 +165,12 @@ class EquipmentModel:
         if hasattr(self, "set_utility"):
             self.set_utility(ok)
 
+    def fault_name(self, name: str) -> str:
+        """A fault's own name: generic vendor fault names (e.g. ch1_starter_fault) are aliases."""
+        return getattr(self, "fault_alias", {}).get(name, name)
+
     def set_fault(self, name: str, active: bool, value: Optional[float] = None) -> None:
+        name = self.fault_name(name)
         if name not in self.faults:
             raise KeyError(f"{self.TYPE}: no fault named {name!r}")
         state = self.faults[name]
@@ -178,7 +183,7 @@ class EquipmentModel:
             self.faults[f.name] = FaultState(False, f.default)
 
     def fault(self, name: str) -> bool:
-        return self.faults[name].active
+        return self.faults[self.fault_name(name)].active
 
     def fault_value(self, name: str) -> float:
         return self.faults[name].value

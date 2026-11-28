@@ -322,6 +322,8 @@ class PlantDemoLogic:
                 self.targets[c.input] = (f.device_instance, objid_text(c.objid))
         m = plant.model
         self.ch = [c["pre"] for c in m.chillers]
+        # the chillers' command objects by BAS role (each vendor names its own)
+        self.ch_role = {c["pre"]: type(c["unit"]).ROLES for c in m.chillers}
         self.pp = [x["pre"] for x in m.pumps["primary_pumps"]]
         self.sp = [x["pre"] for x in m.pumps["secondary_pumps"]]
         self.cp = [x["pre"] for x in m.pumps["condenser_pumps"]]
@@ -420,8 +422,8 @@ class PlantDemoLogic:
                 outs[f"{ct}_bypass_vlv"] = False
             proven = on and v(f"{c}_chw_vlv_open") is True and v(f"{c}_cw_vlv_open") is True \
                 and v(f"{c}_chw_flow") > 1500 and v(f"{c}_cw_flow") > 2000
-            outs[f"{c}.rem_sp"] = 44.0
-            outs[f"{c}.rem_run"] = bool(proven)
+            outs[f"{c}.{self.ch_role[c]['chws_sp']}"] = 44.0
+            outs[f"{c}.{self.ch_role[c]['run_cmd']}"] = bool(proven)
         for t in self.ct:
             outs[f"{t}_outlet_vlv"] = outs[f"{t}_eq_vlv"] = True
             outs[f"{t}_basin_htr"] = power and v(f"{t}_basin_temp", 60.0) < 40.0
@@ -467,6 +469,8 @@ class HwPlantDemoLogic(PlantDemoLogic):
                 self.targets[c.input] = (f.device_instance, objid_text(c.objid))
         m = plant.model
         self.bl = [b["pre"] for b in m.boilers]
+        # the boilers' command objects by BAS role (each vendor names its own)
+        self.bl_role = {b["pre"]: type(b["unit"]).ROLES for b in m.boilers}
         self.pump_of = {b["pre"]: b["pumpx"]["pre"] for b in m.boilers}
         self.sp = [x["pre"] for x in m.pumps["secondary_pumps"]]
         self.br = [(b["pre"], int(b["controller_device"])) for b in m.branches]
@@ -537,8 +541,11 @@ class HwPlantDemoLogic(PlantDemoLogic):
             outs[f"{pump}_ss"] = want or self.pump_post[b] > 0
             outs[f"{pump}_vfd_spd"] = 91.7
             enable = want and self.pump_run[b] >= 30.0
-            outs[f"{b}.bms_enable"] = enable
-            outs[f"{b}.bms_rate"] = round(self.rate, 1) if enable else 0.0
+            outs[f"{b}.{self.bl_role[b]['enable']}"] = enable
+            if m.p.get("boiler_bms_mode", "rate") == "setpoint":      # the boiler modulates to the reset setpoint
+                outs[f"{b}.{self.bl_role[b]['sp_cmd']}"] = round(sp, 1)
+            else:
+                outs[f"{b}.{self.bl_role[b]['rate_cmd']}"] = round(self.rate, 1) if enable else 0.0
         outs["louver"] = bool(on_set)
         # secondary pumps: plant DP, setpoint trimmed by the remote DPs
         rdp = [self.value("hw_remote_dp", ctl) for _p, ctl in self.br]
@@ -611,8 +618,11 @@ class GenPlantDemoLogic(PlantDemoLogic):
                 ats.append((await self.client.read(5, 40257 + 60 * n + 2, 1))[0])   # ATS state
             gens = []
             for g in m.gens:
+                cls = type(g["unit"])                              # the genset vendor's register map
+                reg = cls.role_register("at_rated")
                 try:
-                    gens.append(await self.client.read(int(g["unit_id"]), 40010, 5))
+                    v = (await self.client.read(int(g["unit_id"]), reg, 1))[0]
+                    gens.append(cls.decode("at_rated", {reg: v}))
                 except Exception:
                     gens.append(None)
         except Exception as err:
@@ -652,7 +662,7 @@ class GenPlantDemoLogic(PlantDemoLogic):
         for name, val in outs.items():
             if name in self.targets:
                 await self._write(name, val)
-        running = sum(1 for g in d["gens"] if g and g[1] == 3)
+        running = sum(1 for g in d["gens"] if g)
         held = [n.split("_")[0].upper() for n, v in outs.items() if v]
         self.status = (f"utility {'NORMAL' if d['utility'] else 'FAILED'}, {d['online']} set(s) online, "
                        f"bus {d['load']}/{d['cap']} kW, {running} rated, shed level {d['shed']}"

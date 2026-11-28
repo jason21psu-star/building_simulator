@@ -8,7 +8,8 @@ Hot water plant (docs/HW_PLANT_DESIGN.md).
 
 Equipment comes from CSV schedules, so inputs / signals / faults are built per
 instance (same conventions as chw_plant).  The boilers are Mode B devices
-serving the Crest BMS object list (components/crest.py); everything else is
+serving the Crest BMS object list (components/boilers/lochinvar_crest.py; the
+boiler make and model is the CSV column `model`, docs/EQUIPMENT_INTERFACE_DESIGN.md); everything else is
 hardwired to the ALC controller in each row's controller_device.
 """
 
@@ -22,7 +23,8 @@ from typing import Any, Dict, List, Optional
 from .base import EquipmentModel, FaultDef, ParamInfo, SignalDef
 from .chw_plant import DRIVE_FAULTS, ChwPlant, prefix
 from .components.airside import equal_percentage
-from .components.crest import CREST_FAULTS, CREST_OBJECTS, CrestBoiler
+from .components.boilers import boiler_class
+from .components.vendor import bacnet_device, signal_defs
 from .components.hydronic import FT_PER_PSI, IsoValve, Pump, bisect, parallel_r, root, solve_pumps
 
 _A = "analog"
@@ -31,7 +33,8 @@ _GPM = "usGallonsPerMinute"
 _PSI = "poundsForcePerSquareInch"
 
 EQUIPMENT_DEFAULTS = {
-    "boilers": {"input_mbh": 4000.0, "design_gpm": 400.0, "min_flow_gpm": 120.0, "turndown": 25.0, "hx_dp_ft": 15.0},
+    "boilers": {"input_mbh": 4000.0, "design_gpm": 400.0, "min_flow_gpm": 120.0, "turndown": 25.0, "hx_dp_ft": 15.0,
+                "model": "lochinvar_crest"},
     "primary_pumps": {"design_gpm": 400.0, "design_head_ft": 40.0, "motor_hp": 7.5, "ct_range_amps": 20.0, "boiler": "",
                       "drive_model": "ach580"},
     "secondary_pumps": {"design_gpm": 600.0, "design_head_ft": 80.0, "motor_hp": 20.0, "ct_range_amps": 50.0,
@@ -114,6 +117,8 @@ class HwPlant(EquipmentModel):
         "initial_loop_temp": 130.0,
         "sensor_noise": 0.03,
         "phwp_drive": {}, "shwp_drive": {},
+        "boiler": {},                    # vendor settings, flat or per model ({"lochinvar_crest": {...}})
+        "boiler_bms_mode": "rate",       # rate (enable + firing rate) or setpoint (enable + supply setpoint)
     }
     WEATHER_PARAMS = {"oat": "oa_temp_actual", "oa_w": "oa_w_actual"}
     CONDITIONS = ["oat", "load_scale"]
@@ -199,30 +204,29 @@ class HwPlant(EquipmentModel):
         def truth(name, units="noUnits", desc="", kind=_A, default=0.0):
             signals.append(SignalDef(name, kind, units, desc, default))
 
-        # boilers: Crest BMS objects + hardwired alarm relay
+        # boilers: the vendor's BMS points + hardwired alarm relay
+        self.fault_alias: Dict[str, str] = {}
         for b in R["boilers"]:
             pre, dev, tag = b["pre"], b["controller_device"], b["tag"]
-            for kind, _n, oname, key, units, role in CREST_OBJECTS:
-                if role == "cmd":
-                    if kind.startswith("binary"):
-                        inputs.append(SignalDef(f"{pre}.{key}", "binary", description=oname, default=False))
-                    else:
-                        inputs.append(SignalDef(f"{pre}.{key}", _A, units, oname, 0.0))
-                elif kind.startswith("binary"):
-                    truth(f"{pre}.{key}", kind="binary", desc=oname, default=False)
-                elif kind.startswith("multi"):
-                    truth(f"{pre}.{key}", "noUnits", oname, default=0)
-                else:
-                    truth(f"{pre}.{key}", units or "noUnits", oname)
+            cls = boiler_class(b["model"])
+            b["model"] = cls.MODEL
+            ins, sigs = signal_defs(cls, pre, b)
+            inputs += ins
+            signals += sigs
             bi(dev, f"{pre}_alarm", f"{tag} alarm contacts (closed = alarm / lockout)", False)
             truth(f"{pre}.flow", _GPM, f"{tag} water flow")
             truth(f"{pre}.mbh_out", "kiloBtusPerHour", f"{tag} output MBH")
             truth(f"{pre}.hx_dp", _PSI, f"{tag} heat exchanger pressure drop")
             truth(f"{pre}.status", kind="text", desc=f"{tag} display status", default="")
-            for k, txt in CREST_FAULTS.items():
+            truth(f"{pre}.view", kind="text", desc=f"{tag} page view (json)", default="{}")
+            for k, txt in cls.FAULTS.items():
                 faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
-            actions += [f"{pre}.{k}" for k in ("local", "bms", "reset")]
-            info[f"{pre}.local_sp"] = ParamInfo("", "Local supply setpoint", f"{tag} display", "°F", minimum=80, maximum=190)
+            for g, k in cls.fault_aliases().items():
+                self.fault_alias[f"{pre}_{g}"] = f"{pre}_{k}"
+            actions += [f"{pre}.{k}" for k in cls.PANEL]
+            for k, i in cls.PANEL_PARAMS.items():
+                info[f"{pre}.{k}"] = ParamInfo(i.id, i.label, f"{tag} {i.group}", i.units,
+                                               minimum=i.minimum, maximum=i.maximum)
 
         # pumps
         for g, label in PUMP_GROUPS.items():
@@ -312,39 +316,15 @@ class HwPlant(EquipmentModel):
 
     def bacnet_devices(self) -> List[Dict[str, Any]]:
         """The boilers' BMS interfaces: one device each (used by plant_runner)."""
-        out = []
-        for b in self.boilers:
-            pre = b["pre"]
-            cmds, mons = [], []
-            for kind, n, oname, key, units, role in CREST_OBJECTS:
-                obj = f"{kind},{n}"
-                if role == "cmd":
-                    d = {"object": obj, "name": oname, "input": f"{pre}.{key}", "description": oname}
-                    if kind.startswith("binary"):
-                        d.update(active_text="ENABLE", inactive_text="DISABLE")
-                    else:
-                        d["units"] = units
-                    cmds.append(d)
-                elif isinstance(role, tuple):
-                    table = role[1]
-                    mons.append({"object": obj, "name": oname, "signal": f"{pre}.{key}",
-                                 "states": [table.get(i, f"Code {i}") for i in range(max(table) + 1)]})
-                else:
-                    d = {"object": obj, "name": oname, "signal": f"{pre}.{key}"}
-                    if units:
-                        d["units"] = units
-                    mons.append(d)
-            out.append({"tag": b["tag"], "pre": pre, "sim_device": int(b["sim_device"]), "mac": int(b["mac"]),
-                        "model_name": "Lochinvar Crest SMART TOUCH BMS (simulated)",
-                        "description": b.get("description", "Lochinvar Crest condensing boiler"),
-                        "kind": "boiler", "commands": cmds, "monitors": mons})
-        return out
+        return [bacnet_device(type(b["unit"]), b, "boiler") for b in self.boilers if b["unit"].PROTOCOL == "bacnet"]
 
     def device_offline(self, pre: str) -> bool:
-        return (not self.utility_ok) or self.estop or self.fault(f"{pre}_gateway_offline")
+        b = self._boiler(pre)
+        key = type(b["unit"]).fault_key("comm_loss") if b else "gateway_offline"
+        return (not self.utility_ok) or self.estop or self.fault(f"{pre}_{key}")
 
     def watch_states(self) -> Dict[str, str]:
-        return {b["tag"]: b["crest"].status_text().split(" · ")[0].split(":")[0] for b in self.boilers}
+        return {b["tag"]: b["unit"].status_text().split(" · ")[0].split(":")[0] for b in self.boilers}
 
     # ------------------------------------------------------------------ state
 
@@ -378,7 +358,7 @@ class HwPlant(EquipmentModel):
             f: set = set()
             self.faults_by[b["pre"]] = f
             pump = next(x for x in self.pumps["primary_pumps"] if str(x["boiler"]) == b["tag"])
-            self.boilers.append({**b, "crest": CrestBoiler(b["tag"], b, f, self.rng, t_init=p["initial_loop_temp"] - 40.0),
+            self.boilers.append({**b, "unit": self._make_boiler(b, f, t_init=p["initial_loop_temp"] - 40.0),
                                  "pumpx": pump, "q": 0.0})
         q_prim = sum(float(b["design_gpm"]) for b in R["boilers"]) or 1.0
         self.r_dec = 0.5 / q_prim ** 2                 # common pipe: 0.5 ft at full primary flow
@@ -444,8 +424,8 @@ class HwPlant(EquipmentModel):
             if pre in self.drive_p:
                 return self.drive_p[pre][k]
             b = self._boiler(pre)
-            if b and k == "local_sp":
-                return b["crest"].local_sp
+            if b and k in b["unit"].PANEL_PARAMS:
+                return b["unit"].panel_param(k)
             raise KeyError(name)
         return self.p[name]
 
@@ -460,8 +440,8 @@ class HwPlant(EquipmentModel):
         if "." in name:
             pre, k = name.split(".", 1)
             b = self._boiler(pre)
-            if b and k == "local_sp":
-                b["crest"].local_sp = max(80.0, min(190.0, float(value)))
+            if b and k in b["unit"].PANEL_PARAMS:
+                b["unit"].set_panel_param(k, value)
                 return
             ChwPlant.set_param(self, name, value)
             return
@@ -469,6 +449,12 @@ class HwPlant(EquipmentModel):
 
     def _chiller(self, pre: str) -> None:        # (ChwPlant.set_param helper)
         return None
+
+    def _make_boiler(self, b: Dict[str, Any], faults: set, t_init: float):
+        """The row's boiler, with its vendor settings (row columns, then the plant's boiler: {...})."""
+        cls = boiler_class(b["model"])
+        cls.check_mode(self.p["boiler_bms_mode"])
+        return cls(b["tag"], {**b, **cls.settings_for(b, self.p["boiler"])}, faults, self.rng, t_init=t_init)
 
     def _boiler(self, pre: str) -> Optional[Dict[str, Any]]:
         return next((b for b in getattr(self, "boilers", []) if b["pre"] == pre), None)
@@ -482,7 +468,7 @@ class HwPlant(EquipmentModel):
             pre, key = name.split(".", 1)
             b = self._boiler(pre)
             if b:
-                b["crest"].display(key)
+                b["unit"].panel(key)
             elif pre in self.drives:
                 self._sync_inject()
                 self.drives[pre].keypad(key, value)
@@ -507,7 +493,7 @@ class HwPlant(EquipmentModel):
         for b in self.boilers:
             f = self.faults_by[b["pre"]]
             f.clear()
-            for k in CREST_FAULTS:
+            for k in type(b["unit"]).FAULTS:
                 if self.fault(f"{b['pre']}_{k}"):
                     f.add(k)
 
@@ -662,13 +648,13 @@ class HwPlant(EquipmentModel):
             self.t_pr += (self.room - self.t_pr) * min(1.0, h / 7200.0)
         num = den = 0.0
         for b in self.boilers:
-            c = b["crest"]
+            c = b["unit"]
             pre = b["pre"]
             c.powered = util and not self.estop
             c.louver_ok, c.gas_ok = louver_ok, gas_ok
             c.comm_ok = not self.device_offline(pre)
-            c.bms_enable = bool(self.inputs[f"{pre}.bms_enable"])
-            c.bms_rate = float(self.inputs[f"{pre}.bms_rate"])
+            for key in c.cmd_keys():
+                c.bas_write(key, self.inputs[f"{pre}.{key}"])
             t_out = c.step(h, b["q"], self.t_pr if b["q"] > 1.0 else c.t_hx, self.room)
             if b["q"] > 1.0:
                 num += b["q"] * t_out
@@ -759,7 +745,7 @@ class HwPlant(EquipmentModel):
         self.loop_press = min(press, p["relief_psi"] + 0.5)
 
         # ---------------- boiler room ----------------
-        firing = sum(b["crest"].rate * float(b["input_mbh"]) for b in self.boilers if b["crest"].flame) / 1000.0
+        firing = sum(b["unit"].gas_mbh for b in self.boilers) / 1000.0
         share = 0.5 * self.louver.pos
         target = 68.0 + 1.5 * firing + (p["oat"] - 68.0) * (0.1 + share)
         self.room += (target - self.room) * min(1.0, h / 900.0)
@@ -782,16 +768,17 @@ class HwPlant(EquipmentModel):
         n = p["sensor_noise"]
         plant_mbh = gas_mbh = 0.0
         for b in self.boilers:
-            pre, c = b["pre"], b["crest"]
+            pre, c = b["pre"], b["unit"]
             for key, val in c.points().items():
                 s[f"{pre}.{key}"] = val
             s[f"{pre}.status"] = c.status_text()
-            s[f"{pre}_alarm"] = bool(c.lockout)
+            s[f"{pre}.view"] = json.dumps(c.view())
+            s[f"{pre}_alarm"] = bool(c.alarm)
             s[f"{pre}.flow"] = round(b["q"], 0)
             s[f"{pre}.mbh_out"] = round(c.q / 1000.0, 0)
             s[f"{pre}.hx_dp"] = round(float(b["hx_dp_ft"]) * (b["q"] / float(b["design_gpm"])) ** 2 / FT_PER_PSI, 2)
             plant_mbh += c.q / 1000.0
-            gas_mbh += (c.rate * float(b["input_mbh"])) if c.flame else 0.0
+            gas_mbh += c.gas_mbh
         kw = 0.0
         for g, items in self.pumps.items():
             for x in items:

@@ -325,9 +325,9 @@ def gen_plant() -> List[Dict[str, Any]]:
     _gen_run(m, 2, 0.5, 2, snaps, "gen2 cleared")
     m.action("gen2.reset")
     m.p["building_kw_occ"] = 3800.0
-    m.gens[3]["gen"].set_switch(0)
+    m.gens[3]["unit"].set_switch(0)
     _gen_run(m, 60, 0.5, 2, snaps, "overload")
-    m.gens[3]["gen"].set_switch(1)
+    m.gens[3]["unit"].set_switch(1)
     m.p["building_kw_occ"] = 1200.0
     m.set_fault("gen1_high_coolant", True)
     _gen_run(m, 600, 2.0, 20, snaps, "gen1 coolant")

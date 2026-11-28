@@ -20,12 +20,13 @@ from typing import Any, Dict, List, Optional
 
 from .base import EquipmentModel, FaultDef, ParamInfo, SignalDef
 from .chw_plant import ChwPlant, prefix
-from .components.pcc import FAULT_CODES, PCC_FAULTS, SEQ_TEXT, SWITCH_TEXT, Genset
+from .components.gensets import GeneratorSet, genset_class
+from .components.gensets.cummins_pcc33 import FAULT_CODES  # noqa: F401  (kept importable from here)
 
 _A = "analog"
 
 EQUIPMENT_DEFAULTS = {
-    "generators": {"unit_id": 1, "kw_rating": 1000.0, "volts": 480.0, "start_priority": 1},
+    "generators": {"unit_id": 1, "kw_rating": 1000.0, "volts": 480.0, "start_priority": 1, "model": "cummins_pcc33"},
     "ats": {"controller_device": 243001, "priority": 1, "shed_order": 0, "retransfer_delay_min": 30.0},
 }
 DEFAULT_LAYOUT: Dict[str, Any] = {
@@ -66,7 +67,7 @@ def unit_kw(model, split: bool = False):
 
     if t == "chw_plant":
         for c in model.chillers:
-            kw += max(0.0, c["yk"].kw)
+            kw += max(0.0, c["unit"].kw)
         for g, items in model.pumps.items():
             for x in items:
                 p = drive(model.drives[x["pre"]])
@@ -79,7 +80,7 @@ def unit_kw(model, split: bool = False):
         kvar = 0.33 * kw
     elif t == "hw_plant":
         kw = sum(drive(v) for v in model.drives.values())
-        kw += sum(1.5 for b in model.boilers if b["crest"].flame)
+        kw += sum(1.5 for b in model.boilers if b["unit"].flame)
         kvar = 0.33 * kw
     elif t == "ahu_vav_econ":
         kw = sum(drive(v) for v in model.drives.values())
@@ -100,27 +101,21 @@ def unit_kw(model, split: bool = False):
 # ----------------------------------------------------------------------------- Modbus units
 
 class GenUnit:
-    """Modbus unit for one generator (PowerCommand 3.x register map)."""
+    """Modbus unit for one generator: the genset vendor's register map."""
 
     def __init__(self, plant: "GenPlant", g: Dict[str, Any]):
         self.plant, self.g = plant, g
 
     def online(self) -> bool:
-        return not self.plant.fault(f"{self.g['pre']}_comm_loss")
+        gs: GeneratorSet = self.g["unit"]
+        return not self.plant.fault(f"{self.g['pre']}_{type(gs).fault_key('comm_loss')}")
 
     def read(self, reg: int) -> Optional[int]:
         return self.g["regs"].get(reg)
 
     def write(self, reg: int, value: int) -> bool:
-        gs: Genset = self.g["gen"]
-        if reg == 40300:
-            gs.remote_start = 1 if value else 0
-            return True
-        if reg == 40301:
-            if value:
-                gs.fault_reset()
-            return True
-        return False
+        gs: GeneratorSet = self.g["unit"]
+        return gs.modbus_write(reg, value)
 
 
 class MasterUnit:
@@ -156,6 +151,7 @@ class GenPlant(EquipmentModel):
         "occ_end": 18.0,
         "clock_start": "",
         "oat": 60.0,
+        "genset": {},                    # vendor settings, flat or per model ({"cummins_pcc33": {...}})
     }
     WEATHER_PARAMS = {"oat": "oa_temp_actual"}
     CONDITIONS = ["oat", "building_kw_occ", "building_kw_unocc"]
@@ -198,6 +194,7 @@ class GenPlant(EquipmentModel):
         def truth(name, units="noUnits", desc="", kind=_A, default=0.0):
             signals.append(SignalDef(name, kind, units, desc, default))
 
+        self.fault_alias: Dict[str, str] = {}
         for g in self.rows["generators"]:
             pre, tag = g["pre"], g["tag"]
             for k, u, d in (("kw", "kilowatts", "kW"), ("kvar", "noUnits", "kVAR"), ("freq", "hertz", "frequency"),
@@ -209,9 +206,14 @@ class GenPlant(EquipmentModel):
             truth(f"{pre}.status", kind="text", desc=f"{tag} status", default="")
             truth(f"{pre}.cb", kind="binary", desc=f"{tag} breaker closed", default=False)
             truth(f"{pre}.switch", kind="text", desc=f"{tag} control switch", default="Auto")
-            for k, txt in PCC_FAULTS.items():
+            truth(f"{pre}.view", kind="text", desc=f"{tag} page view (json)", default="{}")
+            cls = genset_class(g["model"])
+            g["model"] = cls.MODEL
+            for k, txt in cls.FAULTS.items():
                 faults.append(FaultDef(f"{pre}_{k}", f"{tag}: {txt}", tag))
-            actions += [f"{pre}.{k}" for k in ("off", "auto", "manual", "reset")]
+            actions += [f"{pre}.{k}" for k in cls.PANEL]
+            for gname, k in cls.fault_aliases().items():
+                self.fault_alias[f"{pre}_{gname}"] = f"{pre}_{k}"
 
         for a in self.rows["ats"]:
             pre, tag, dev = a["pre"], a["tag"], a["controller_device"]
@@ -256,7 +258,7 @@ class GenPlant(EquipmentModel):
         return False
 
     def watch_states(self) -> Dict[str, str]:
-        out = {g["tag"]: g["gen"].status_text().split(" · ")[0].split(" (")[0] for g in self.gens}
+        out = {g["tag"]: g["unit"].status_text().split(" · ")[0].split(" (")[0] for g in self.gens}
         out.update({f"{a['tag']} position": {"N": "NORMAL", "E": "EMERGENCY", "O": "OPEN", "B": "BOTH (closed transition)"}[a["pos"]]
                     for a in self.ats})
         out["load shed level"] = str(self.shed_level)
@@ -269,13 +271,18 @@ class GenPlant(EquipmentModel):
 
     # ------------------------------------------------------------------ state
 
+    def _make_genset(self, g: Dict[str, Any], faults: set) -> GeneratorSet:
+        """The row's genset, with its vendor settings (row columns, then the plant's genset: {...})."""
+        cls = genset_class(g["model"])
+        return cls(g["tag"], {**g, **cls.settings_for(g, self.p["genset"])}, faults, self.rng)
+
     def reset(self) -> None:
         self.gens: List[Dict[str, Any]] = []
         self.faults_by: Dict[str, set] = {}
         for g in self.rows["generators"]:
             f: set = set()
             self.faults_by[g["pre"]] = f
-            self.gens.append({**g, "gen": Genset(g["tag"], g, f, self.rng), "sync_s": 0.0, "regs": {}, "fts_s": 0.0})
+            self.gens.append({**g, "unit": self._make_genset(g, f), "sync_s": 0.0, "regs": {}, "fts_s": 0.0})
         self.ats: List[Dict[str, Any]] = []
         for a in self.rows["ats"]:
             self.ats.append({**a, "pos": "N", "timer": 0.0, "retx": 0.0, "sync": 0.0, "shed": False,
@@ -313,21 +320,18 @@ class GenPlant(EquipmentModel):
         g = next((x for x in self.gens if x["pre"] == pre), None)
         if g is None:
             raise KeyError(name)
-        gs: Genset = g["gen"]
-        if key in ("off", "auto", "manual"):
-            gs.set_switch({"off": 0, "auto": 1, "manual": 2}[key])
-        elif key == "reset":
-            if not gs.fault_reset():
-                raise ValueError(f"{g['tag']}: fault reset needs the control switch in Off or Auto")
-        else:
-            raise KeyError(name)
+        gs: GeneratorSet = g["unit"]
+        try:
+            gs.panel(key)
+        except KeyError:
+            raise KeyError(name) from None
         self._publish()
 
     def _sync_inject(self) -> None:
         for g in self.gens:
             f = self.faults_by[g["pre"]]
             f.clear()
-            for k in PCC_FAULTS:
+            for k in type(g["unit"]).FAULTS:
                 if self.fault(f"{g['pre']}_{k}"):
                     f.add(k)
 
@@ -345,7 +349,7 @@ class GenPlant(EquipmentModel):
 
     def bus_live(self) -> bool:
         """Energized (a set's breaker closed) - a sagging bus still feeds its loads."""
-        return any(g["gen"].cb_closed for g in self.gens) and self.bus_f > 0.0
+        return any(g["unit"].cb_closed for g in self.gens) and self.bus_f > 0.0
 
     # ------------------------------------------------------------------ step
 
@@ -381,14 +385,14 @@ class GenPlant(EquipmentModel):
             self.emergency = True
         elif not on_emer:
             self.emergency = False
-        ready = [g for g in self.gens if g["gen"].switch == 1 and not g["gen"].shutdown]
+        ready = [g for g in self.gens if g["unit"].in_auto and not g["unit"].shutdown]
         if self.emergency:
-            online = [g for g in self.gens if g["gen"].cb_closed]
-            cap_one = max([g["gen"].capacity() for g in self.gens] + [1.0])
+            online = [g for g in self.gens if g["unit"].cb_closed]
+            cap_one = max([g["unit"].capacity() for g in self.gens] + [1.0])
             needed = min(len(ready), int(math.ceil(self.bus_kw / (0.9 * cap_one))) + 1) if self.bus_kw > 0 else 2
             self._ld_s = self._ld_s + h if (len(online) > needed and self.shed_level == 0 and u is False) else 0.0
             for g in sorted(self.gens, key=lambda x: int(x["start_priority"])):
-                gs = g["gen"]
+                gs = g["unit"]
                 if gs.load_demand_stopped:
                     gs.master_call = len([x for x in online if x is not g]) < needed or self.shed_level > 0
                     if gs.master_call:
@@ -400,23 +404,23 @@ class GenPlant(EquipmentModel):
                 spare = sorted(online, key=lambda x: -int(x["start_priority"]))
                 if spare:
                     g = spare[0]
-                    g["gen"].master_call = False
-                    g["gen"].load_demand_stopped = True
-                    g["gen"].cb_closed = False
+                    g["unit"].master_call = False
+                    g["unit"].load_demand_stopped = True
+                    g["unit"].cb_closed = False
                 self._ld_s = 0.0
         else:
             for g in self.gens:
-                g["gen"].master_call = False
-                g["gen"].load_demand_stopped = False
+                g["unit"].master_call = False
+                g["unit"].load_demand_stopped = False
 
         # ---------------- gensets ----------------
         for g in self.gens:
-            g["gen"].step(h, (p["oat"] - 32.0) * 5.0 / 9.0, self.bus_f if self.bus_live() else None)
+            g["unit"].step(h, (p["oat"] - 32.0) * 5.0 / 9.0, self.bus_f if self.bus_live() else None)
 
         # ---------------- breakers: dead-bus closure, synchronizing ----------------
-        dead = not any(g["gen"].cb_closed for g in self.gens)
+        dead = not any(g["unit"].cb_closed for g in self.gens)
         for g in sorted(self.gens, key=lambda x: int(x["start_priority"])):
-            gs = g["gen"]
+            gs = g["unit"]
             want = gs.at_rated and gs.start_request
             if not want:
                 g["sync_s"] = 0.0
@@ -427,8 +431,8 @@ class GenPlant(EquipmentModel):
                 continue
             if "cb_fail_close" in gs.faults:
                 g["sync_s"] += h
-                if g["sync_s"] > 5.0 and 1452 not in gs.active:
-                    gs._raise(1452)
+                if g["sync_s"] > 5.0 and not gs.plant_event_active("cb_fail_to_close"):
+                    gs.plant_event("cb_fail_to_close")
                 continue
             if dead:
                 gs.cb_closed = True                     # first up closes to the dead bus
@@ -437,8 +441,8 @@ class GenPlant(EquipmentModel):
                 continue
             if "fail_to_sync" in gs.faults:
                 g["sync_s"] += h
-                if g["sync_s"] > 60.0 and 1457 not in gs.active:
-                    gs._raise(1457)
+                if g["sync_s"] > 60.0 and not gs.plant_event_active("fail_to_sync"):
+                    gs.plant_event("fail_to_sync")
                 continue
             g["sync_s"] += h
             if g["sync_s"] >= g.setdefault("sync_need", 2.0 + 6.0 * self.rng.random()) and self.bus_f > 58.5:
@@ -447,8 +451,8 @@ class GenPlant(EquipmentModel):
                 g.pop("sync_need", None)
 
         # ---------------- bus: load sharing, frequency / voltage response ----------------
-        online = [g for g in self.gens if g["gen"].cb_closed]
-        cap = sum(g["gen"].capacity() for g in online)
+        online = [g for g in self.gens if g["unit"].cb_closed]
+        cap = sum(g["unit"].capacity() for g in online)
         e_kw = sum(a["kw"] for a in self.ats if a["pos"] in ("E",) and online)
         e_kvar = sum(a["kvar"] for a in self.ats if a["pos"] in ("E",) and online)
         if online and cap > 0:
@@ -461,21 +465,21 @@ class GenPlant(EquipmentModel):
             self.bus_f = max(0.0, min(62.0, self.bus_f))
             self.bus_v = 480.0 * max(0.0, 1.0 - 0.012 * max(0.0, 60.0 - self.bus_f))
             for g in online:
-                share = g["gen"].capacity() / cap
-                g["gen"].kw = e_kw * share
-                g["gen"].kvar = e_kvar * share
+                share = g["unit"].capacity() / cap
+                g["unit"].kw = e_kw * share
+                g["unit"].kvar = e_kvar * share
             self._bus_up_s += h
         else:
             self.bus_f, self.bus_v = 0.0, 0.0
             self._bus_up_s = 0.0
         for g in self.gens:
-            if not g["gen"].cb_closed:
-                g["gen"].kw = g["gen"].kvar = 0.0
-            if g["gen"].kw > 1.0 * g["gen"].capacity():
-                if 1444 not in g["gen"].active:
-                    g["gen"]._raise(1444)
+            if not g["unit"].cb_closed:
+                g["unit"].kw = g["unit"].kvar = 0.0
+            if g["unit"].kw > 1.0 * g["unit"].capacity():
+                if not g["unit"].plant_event_active("overload"):
+                    g["unit"].plant_event("overload")
             else:
-                g["gen"]._clear(1444)
+                g["unit"].plant_event_clear("overload")
         self._last_bus_kw = e_kw
         self.bus_kw, self.bus_kvar = e_kw, e_kvar
 
@@ -495,7 +499,7 @@ class GenPlant(EquipmentModel):
             self._under_s += h
             if self._under_s >= 10.0:
                 for g in online:
-                    g["gen"]._raise(1448)
+                    g["unit"].plant_event("underfrequency")
                 self._under_s = 0.0
         else:
             self._under_s = 0.0
@@ -601,9 +605,9 @@ class GenPlant(EquipmentModel):
             return
         s = self.signals
         for g in self.gens:
-            pre, gs = g["pre"], g["gen"]
+            pre, gs = g["pre"], g["unit"]
             pf = gs.kw / math.hypot(gs.kw, gs.kvar) if gs.kw > 1 else 1.0
-            g["regs"] = gs.registers(pf)
+            g["regs"] = gs.modbus_registers(pf)
             s[f"{pre}.kw"] = round(gs.kw if gs.cb_closed else 0.0, 0)
             s[f"{pre}.kvar"] = round(gs.kvar if gs.cb_closed else 0.0, 0)
             s[f"{pre}.freq"] = round(gs.freq, 2)
@@ -616,10 +620,11 @@ class GenPlant(EquipmentModel):
             s[f"{pre}.hours"] = round(gs.run_s / 3600.0, 2)
             s[f"{pre}.starts"] = float(gs.starts)
             s[f"{pre}.pct"] = round(100.0 * gs.kw / gs.kw_rating, 0) if gs.cb_closed else 0.0
-            s[f"{pre}.fault_code"] = float(gs.fault_code or (max(gs.active) if gs.active else 0))
+            s[f"{pre}.fault_code"] = float(gs.display_code())
             s[f"{pre}.status"] = gs.status_text()
             s[f"{pre}.cb"] = bool(gs.cb_closed)
-            s[f"{pre}.switch"] = SWITCH_TEXT[gs.switch]
+            s[f"{pre}.switch"] = gs.switch_text()
+            s[f"{pre}.view"] = json.dumps(gs.view())
         for a in self.ats:
             pre = a["pre"]
             s[f"{pre}_norm_pos"] = a["pos"] in ("N", "B")
@@ -630,13 +635,13 @@ class GenPlant(EquipmentModel):
             s[f"{pre}.live"] = self.ats_live(a)
             s[f"{pre}.status"] = a["status"]
         s["utility_avail"] = bool(self.utility_ok)
-        s["gen_running"] = any(g["gen"].running for g in self.gens)
+        s["gen_running"] = any(g["unit"].running for g in self.gens)
         s["load_shed"] = self.shed_level > 0
-        online = [g for g in self.gens if g["gen"].cb_closed]
+        online = [g for g in self.gens if g["unit"].cb_closed]
         s["bus_freq"] = round(self.bus_f, 2)
         s["bus_volts"] = round(self.bus_v, 0)
         s["bus_kw"] = round(self.bus_kw, 0)
-        s["online_kw"] = round(sum(g["gen"].capacity() for g in online), 0)
+        s["online_kw"] = round(sum(g["unit"].capacity() for g in online), 0)
         s["sets_online"] = float(len(online))
         s["shed_level"] = float(self.shed_level)
         s["building_kw"] = round(self.building_kw, 0)
@@ -652,22 +657,22 @@ class GenPlant(EquipmentModel):
             "ats_desc": {a["pre"]: a.get("description", "") for a in self.ats},
             "feeds": {a["pre"]: [x["name"] for x in self.loads if x["ats"] is a] for a in self.ats},
             "master_unit": MASTER_UNIT,
-            "seq_text": SEQ_TEXT,
+            "seq_text": type(self.gens[0]["unit"]).CODE_TABLES.get("sequence", {}) if self.gens else {},
         })
         self._publish_regs()
 
     def _publish_regs(self) -> None:
         """DMC 1500 style master register image (A029X159 section 7.1)."""
         r: Dict[int, int] = {}
-        online = [g for g in self.gens if g["gen"].cb_closed]
-        cap = sum(g["gen"].capacity() for g in online)
+        online = [g for g in self.gens if g["unit"].cb_closed]
+        cap = sum(g["unit"].capacity() for g in online)
         u = self.utility_ok
         bit = lambda pairs: sum(1 << b for b, on in pairs if on)
         r[40001] = bit([(6, not u), (8, not u)])
         r[40002] = bit([(7, bool(online) and self.bus_v < 430.0), (9, bool(online) and not 58.0 <= self.bus_f <= 62.0),
-                        (12, any(g["gen"].master_call and g["gen"].shutdown for g in self.gens)),
+                        (12, any(g["unit"].master_call and g["unit"].shutdown for g in self.gens)),
                         (14, bool(online) and self.bus_kw > cap)])
-        r[40003] = bit([(3, any(1457 in g["gen"].active for g in self.gens))])
+        r[40003] = bit([(3, any(g["unit"].plant_event_active("fail_to_sync") for g in self.gens))])
         r[40004] = 0
         bus_avail = bool(online) and self.bus_f > 57.0
         r[40006] = bit([(0, True), (4, True), (6, bus_avail), (7, u),
@@ -751,7 +756,7 @@ class GenPlant(EquipmentModel):
         r[40901] = len(online)
         r[40902] = int(round(cap))
         r[40903] = int(round(self.bus_kw))
-        r[40904] = sum(1 for g in self.gens if g["gen"].running)
+        r[40904] = sum(1 for g in self.gens if g["unit"].running)
         for reg in range(40905, 40910):
             r[reg] = 0
         for reg in range(40001, 40071):

@@ -115,7 +115,7 @@ instances:
     m = ChwPlant(inst["equipment"]["params"], layout=inst["plant_layout"])
     assert [c["tag"] for c in m.chillers] == ["CH-1", "CH-2", "CH-3", "CH-4"]
     assert m.chillers[2]["capacity_tons"] == 1200.0               # blank cells keep the default
-    assert m.chillers[3]["yk"].capacity == 500.0
+    assert m.chillers[3]["unit"].capacity == 500.0
     assert [x["tag"] for x in m.pumps["primary_pumps"]] == ["P-1", "P-2"]
     assert "p2_ss" in m.io[241001]["bo"] and "ch4_chw_vlv" in m.io[241001]["bo"]
     assert len(m.pumps["secondary_pumps"]) == 3                    # not listed: default 3
